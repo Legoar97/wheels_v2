@@ -4,11 +4,11 @@ import { MapPin, Navigation, Clock, User, Star, CheckCircle, Users, RefreshCw } 
 const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppState }) => {
   const [passengers, setPassengers] = useState([]);
   const [loading, setLoading] = useState(true);
-  const { acceptedPassengers, currentTripId } = appState;
+  const [error, setError] = useState(null);
+  const { acceptedPassengers = [], currentTripId } = appState;
 
   useEffect(() => {
     loadPassengers();
-    
     // Recargar cada 5 segundos
     const interval = setInterval(loadPassengers, 5000);
     return () => clearInterval(interval);
@@ -16,29 +16,57 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
 
   const loadPassengers = async () => {
     setLoading(true);
+    setError(null);
+    
     try {
-      const { data, error } = await supabase
+      // Primero, obtener todos los pasajeros buscando viaje
+      const { data: passengerRequests, error: fetchError } = await supabase
         .from('searching_pool')
-        .select(`
-          *,
-          profiles (
-            full_name,
-            email,
-            rating
-          )
-        `)
+        .select('*')
         .eq('tipo_de_usuario', 'passenger')
-        .eq('status', 'searching')
-        .not('pickup_lat', 'is', null)
-        .not('dropoff_lat', 'is', null);
+        .eq('status', 'searching');
 
-      if (error) {
-        console.error('Error loading passengers:', error);
+      if (fetchError) {
+        console.error('Error fetching passengers:', fetchError);
+        setError(fetchError.message);
+        setPassengers([]);
+        return;
+      }
+
+      // Si hay pasajeros, obtener su información de perfiles
+      if (passengerRequests && passengerRequests.length > 0) {
+        const passengerIds = passengerRequests.map(p => p.user_id);
+        
+        const { data: profiles, error: profileError } = await supabase
+          .from('profiles')
+          .select('user_id, full_name, email, rating')
+          .in('user_id', passengerIds);
+
+        if (profileError) {
+          console.error('Error fetching profiles:', profileError);
+        }
+
+        // Combinar la información
+        const passengersWithProfiles = passengerRequests.map(passenger => {
+          const profile = profiles?.find(p => p.user_id === passenger.user_id) || {};
+          return {
+            ...passenger,
+            profile: {
+              full_name: profile.full_name || 'Usuario',
+              email: profile.email || '',
+              rating: profile.rating || 5.0
+            }
+          };
+        });
+
+        setPassengers(passengersWithProfiles);
       } else {
-        setPassengers(data || []);
+        setPassengers([]);
       }
     } catch (error) {
-      console.error('Error:', error);
+      console.error('Error in loadPassengers:', error);
+      setError('Error al cargar pasajeros');
+      setPassengers([]);
     } finally {
       setLoading(false);
     }
@@ -46,31 +74,43 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
 
   const acceptPassenger = async (passenger) => {
     try {
+      // Actualizar estado del pasajero a "matched" inmediatamente
+      const { error: updateError } = await supabase
+        .from('searching_pool')
+        .update({ status: 'matched' })
+        .eq('id', passenger.id);
+
+      if (updateError) {
+        console.error('Error updating passenger status:', updateError);
+        alert('Error al actualizar estado del pasajero');
+        return;
+      }
+
       // Crear registro en driver_acceptances
       const { error: acceptError } = await supabase
         .from('driver_acceptances')
         .insert({
           driver_id: user.id,
-          passenger_email: passenger.profiles.email,
+          passenger_email: passenger.profile.email,
           trip_info: {
             pickup: passenger.pickup_address,
             dropoff: passenger.dropoff_address,
             passenger_id: passenger.user_id,
-            passenger_name: passenger.profiles.full_name
+            passenger_name: passenger.profile.full_name,
+            searching_pool_id: passenger.id
           }
         });
 
       if (acceptError) {
-        console.error('Error accepting passenger:', acceptError);
-        alert('Error al aceptar pasajero: ' + acceptError.message);
+        console.error('Error creating acceptance record:', acceptError);
+        // Revertir el cambio de estado si falla
+        await supabase
+          .from('searching_pool')
+          .update({ status: 'searching' })
+          .eq('id', passenger.id);
+        alert('Error al aceptar pasajero');
         return;
       }
-
-      // Actualizar estado del pasajero
-      await supabase
-        .from('searching_pool')
-        .update({ status: 'matched' })
-        .eq('id', passenger.id);
       
       // Actualizar estado local
       const newAccepted = [...acceptedPassengers, passenger];
@@ -79,7 +119,7 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
       // Remover de la lista
       setPassengers(passengers.filter(p => p.id !== passenger.id));
       
-      alert(`✅ ${passenger.profiles.full_name || 'Pasajero'} aceptado correctamente`);
+      alert(`✅ ${passenger.profile.full_name} aceptado correctamente`);
     } catch (error) {
       console.error('Error:', error);
       alert('Error al aceptar pasajero');
@@ -93,26 +133,50 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
     }
 
     try {
-      const { error } = await supabase
-        .from('start_of_trip')
-        .insert({ 
-          driver_id: user.id,
-          trip_id: currentTripId,
-          status: 'started' 
-        });
+      // Actualizar el estado del conductor a "in_progress"
+      const { error: driverError } = await supabase
+        .from('searching_pool')
+        .update({ status: 'in_progress' })
+        .eq('id', currentTripId);
 
-      if (!error) {
-        // Actualizar estado del viaje en searching_pool
-        await supabase
-          .from('searching_pool')
-          .update({ status: 'in_progress' })
-          .eq('id', currentTripId);
-
-        navigate('liveTrip');
-      } else {
-        console.error('Error starting trip:', error);
-        alert('Error al iniciar viaje: ' + error.message);
+      if (driverError) {
+        console.error('Error updating driver status:', driverError);
+        alert('Error al actualizar estado del conductor');
+        return;
       }
+
+      // Actualizar el estado de todos los pasajeros aceptados a "in_progress"
+      const passengerIds = acceptedPassengers.map(p => p.id);
+      const { error: passengerError } = await supabase
+        .from('searching_pool')
+        .update({ status: 'in_progress' })
+        .in('id', passengerIds);
+
+      if (passengerError) {
+        console.error('Error updating passenger status:', passengerError);
+        alert('Error al actualizar estado de pasajeros');
+        return;
+      }
+
+      // Crear registro del viaje en successful_trips
+      const { data: tripData, error: tripError } = await supabase
+        .from('successful_trips')
+        .insert({
+          driver_id: user.id,
+          status: 'started',
+          total_passengers: acceptedPassengers.length,
+          total_earnings: acceptedPassengers.length * 5000
+        })
+        .select()
+        .single();
+
+      if (tripError) {
+        console.error('Error creating trip record:', tripError);
+        // Continuar de todos modos
+      }
+
+      alert('✅ Viaje iniciado correctamente');
+      navigate('liveTrip');
     } catch (error) {
       console.error('Error:', error);
       alert('Error al iniciar viaje');
@@ -133,6 +197,13 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
           <h1 className="text-3xl font-bold text-gray-800">Pasajeros Disponibles</h1>
           <p className="text-gray-600 mt-2">Selecciona los pasajeros que deseas recoger en tu ruta</p>
         </div>
+
+        {/* Estado de error si existe */}
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+            <p className="text-red-700">⚠️ {error}</p>
+          </div>
+        )}
 
         {/* Lista de Pasajeros */}
         <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
@@ -186,11 +257,11 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
                         </div>
                         <div>
                           <span className="font-semibold text-gray-800">
-                            {passenger.profiles?.full_name || 'Usuario'}
+                            {passenger.profile.full_name}
                           </span>
                           <div className="flex items-center space-x-1 mt-1">
                             <Star className="w-4 h-4 text-yellow-400 fill-current" />
-                            <span className="text-sm text-gray-600">{passenger.profiles?.rating || '5.0'}</span>
+                            <span className="text-sm text-gray-600">{passenger.profile.rating}</span>
                           </div>
                         </div>
                       </div>
@@ -241,7 +312,7 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
                 <div key={idx} className="flex items-center space-x-2 text-sm text-green-800 bg-white rounded-lg p-3">
                   <CheckCircle className="w-4 h-4 flex-shrink-0" />
                   <div className="flex-1">
-                    <p className="font-medium">{p.profiles?.full_name || 'Pasajero'}</p>
+                    <p className="font-medium">{p.profile?.full_name || 'Pasajero'}</p>
                     <p className="text-xs text-green-600">{p.pickup_address}</p>
                   </div>
                 </div>

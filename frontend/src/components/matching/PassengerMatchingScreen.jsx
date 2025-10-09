@@ -4,59 +4,86 @@ import { CheckCircle } from 'lucide-react';
 const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
   const [searchStatus, setSearchStatus] = useState('searching');
   const [matchFound, setMatchFound] = useState(false);
+  const [myRequestId, setMyRequestId] = useState(null);
 
   useEffect(() => {
-    // Simular búsqueda y suscribirse a cambios en driver_acceptances
-    const checkForMatch = async () => {
-      // Suscribirse a la tabla driver_acceptances
-      const subscription = supabase
-        .channel('driver_acceptances_channel')
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'driver_acceptances',
-            filter: `passenger_email=eq.${user.email}`
-          },
-          (payload) => {
-            console.log('Match found!', payload);
-            setMatchFound(true);
-            setSearchStatus('matched');
-          }
-        )
-        .subscribe();
-
-      return () => {
-        subscription.unsubscribe();
-      };
+    // Primero, obtener el ID de mi solicitud
+    const getMyRequest = async () => {
+      const { data, error } = await supabase
+        .from('searching_pool')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('tipo_de_usuario', 'passenger')
+        .single();
+      
+      if (data) {
+        setMyRequestId(data.id);
+      }
     };
+    
+    getMyRequest();
+  }, [user.id, supabase]);
 
-    checkForMatch();
+  useEffect(() => {
+    if (!myRequestId) return;
 
-    // Simular progreso de búsqueda
-    const statusTimer = setTimeout(() => {
-      setSearchStatus('analyzing');
-    }, 2000);
+    // Verificar el estado cada 2 segundos
+    const checkStatus = setInterval(async () => {
+      const { data, error } = await supabase
+        .from('searching_pool')
+        .select('status')
+        .eq('id', myRequestId)
+        .single();
+      
+      if (data) {
+        console.log('Mi estado actual:', data.status);
+        
+        if (data.status === 'matched') {
+          setMatchFound(true);
+          setSearchStatus('matched');
+          clearInterval(checkStatus);
+        } else if (data.status === 'in_progress') {
+          setMatchFound(true);
+          setSearchStatus('in_progress');
+          clearInterval(checkStatus);
+        }
+      }
+    }, 2000); // Verificar cada 2 segundos
 
-    const statusTimer2 = setTimeout(() => {
-      setSearchStatus('optimizing');
-    }, 4000);
+    // También verificar driver_acceptances por si acaso
+    const checkAcceptances = setInterval(async () => {
+      const { data, error } = await supabase
+        .from('driver_acceptances')
+        .select('*')
+        .eq('passenger_email', user.email);
+      
+      if (data && data.length > 0) {
+        console.log('Aceptación encontrada!', data);
+        setMatchFound(true);
+        setSearchStatus('matched');
+        clearInterval(checkAcceptances);
+      }
+    }, 3000); // Verificar cada 3 segundos
+
+    // Simular progreso visual
+    setTimeout(() => setSearchStatus('analyzing'), 2000);
+    setTimeout(() => setSearchStatus('optimizing'), 4000);
 
     return () => {
-      clearTimeout(statusTimer);
-      clearTimeout(statusTimer2);
+      clearInterval(checkStatus);
+      clearInterval(checkAcceptances);
     };
-  }, [user.email, supabase]);
+  }, [myRequestId, user.email, supabase]);
 
   const cancelSearch = async () => {
     try {
-      // Cancelar la búsqueda actualizando el estado en searching_pool
-      await supabase
-        .from('searching_pool')
-        .update({ status: 'cancelled' })
-        .eq('user_id', user.id)
-        .eq('status', 'searching');
+      // Eliminar la solicitud
+      if (myRequestId) {
+        await supabase
+          .from('searching_pool')
+          .delete()
+          .eq('id', myRequestId);
+      }
       
       navigate('dashboard');
     } catch (error) {
@@ -71,7 +98,7 @@ const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
         <div className="max-w-md w-full">
           <div className="bg-white rounded-2xl shadow-xl p-8 text-center scale-in">
             <CheckCircle className="w-20 h-20 text-green-600 mx-auto mb-4 animate-bounce" />
-            <h2 className="text-3xl font-bold text-gray-800 mb-2">¡Match Encontrado!</h2>
+            <h2 className="text-3xl font-bold text-gray-800 mb-2">¡Conductor Encontrado!</h2>
             <p className="text-gray-600 mb-6">
               Un conductor ha aceptado tu solicitud de viaje
             </p>
@@ -82,6 +109,15 @@ const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
                 <li>✓ El conductor está preparando la ruta</li>
                 <li>✓ Recibirás una notificación cuando inicie el viaje</li>
                 <li>✓ Prepárate en el punto de recogida acordado</li>
+              </ul>
+            </div>
+
+            <div className="bg-blue-50 rounded-xl p-4 mb-6 text-left">
+              <h4 className="font-semibold text-blue-900 text-sm mb-2">💡 Información importante:</h4>
+              <ul className="text-xs text-blue-700 space-y-1">
+                <li>• Mantén tu teléfono cerca para recibir actualizaciones</li>
+                <li>• Ten el dinero exacto preparado</li>
+                <li>• Sé puntual en el punto de encuentro</li>
               </ul>
             </div>
 
@@ -129,10 +165,10 @@ const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
               searchStatus === 'analyzing' ? 'animate-pulse' : ''
             }`}>
               <CheckCircle className={`w-5 h-5 flex-shrink-0 ${
-                searchStatus === 'optimizing' ? 'text-green-600' : 
+                searchStatus === 'optimizing' || searchStatus === 'matched' ? 'text-green-600' : 
                 searchStatus === 'analyzing' ? 'text-green-600' : 'text-gray-400'
               }`} />
-              <span className={searchStatus === 'analyzing' || searchStatus === 'optimizing' ? 'text-gray-700' : 'text-gray-600'}>
+              <span className={searchStatus === 'analyzing' || searchStatus === 'optimizing' || searchStatus === 'matched' ? 'text-gray-700' : 'text-gray-600'}>
                 Verificando disponibilidad
               </span>
             </div>
@@ -141,9 +177,10 @@ const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
               searchStatus === 'optimizing' ? 'animate-pulse' : ''
             }`}>
               <div className={`w-5 h-5 border-2 rounded-full flex-shrink-0 ${
+                searchStatus === 'matched' ? 'border-green-600 bg-green-600' :
                 searchStatus === 'optimizing' ? 'border-green-700 animate-spin' : 'border-gray-300'
               }`}></div>
-              <span className={searchStatus === 'optimizing' ? 'text-gray-700' : 'text-gray-600'}>
+              <span className={searchStatus === 'optimizing' || searchStatus === 'matched' ? 'text-gray-700' : 'text-gray-600'}>
                 Optimizando emparejamiento
               </span>
             </div>
@@ -161,6 +198,12 @@ const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
               </div>
             </div>
           </div>
+
+          {myRequestId && (
+            <div className="text-xs text-gray-500 mb-4">
+              ID de solicitud: {myRequestId.slice(0, 8)}...
+            </div>
+          )}
 
           <button
             onClick={cancelSearch}

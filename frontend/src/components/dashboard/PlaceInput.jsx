@@ -1,125 +1,210 @@
-// PlaceInput.jsx
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { MapPin, Search } from 'lucide-react';
 
-export default function PlaceInput({
-  placeholder = 'Escribe una dirección…',
-  initialValue = '',
+// Componente PlaceInput mejorado con autocompletado de Google
+const PlaceInput = ({ 
+  label,
+  placeholder = 'Escribe una dirección...',
+  value,
   onPlaceSelected,
-  className = '',
-}) {
-  const [query, setQuery] = React.useState(initialValue);
-  const [preds, setPreds] = React.useState([]);
-  const [isOpen, setIsOpen] = React.useState(false);
-  const [isReady, setIsReady] = React.useState(false);
-  const svcRef = React.useRef(null);
-  const placesRef = React.useRef(null);
-  const tokenRef = React.useRef(null);
-  const debounceRef = React.useRef(null);
-  const containerRef = React.useRef(null);
+  disabled = false 
+}) => {
+  const [inputValue, setInputValue] = useState(value || '');
+  const [isLoaded, setIsLoaded] = useState(false);
+  const inputRef = useRef(null);
+  const autocompleteRef = useRef(null);
 
-  // Inicializa servicios al cargar la API
-  React.useEffect(() => {
-    if (window.google?.maps?.places) {
-      svcRef.current = new google.maps.places.AutocompleteService();
-      placesRef.current = new google.maps.places.PlacesService(document.createElement('div'));
-      tokenRef.current = new google.maps.places.AutocompleteSessionToken();
-      setIsReady(true);
-    }
-  }, []);
-
-  // Cierra el dropdown si clicas fuera
-  React.useEffect(() => {
-    const handler = (e) => {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(e.target)) setIsOpen(false);
-    };
-    document.addEventListener('click', handler);
-    return () => document.removeEventListener('click', handler);
-  }, []);
-
-  // Buscar predicciones con “debounce”
-  const fetchPredictions = React.useCallback(
-    (text) => {
-      if (!svcRef.current || !text) {
-        setPreds([]);
-        return;
+  useEffect(() => {
+    // Verificar si Google Maps está cargado
+    const checkGoogleMaps = () => {
+      if (window.google && window.google.maps && window.google.maps.places) {
+        setIsLoaded(true);
+        initAutocomplete();
+      } else {
+        setTimeout(checkGoogleMaps, 500);
       }
-      svcRef.current.getPlacePredictions(
-        { input: text, sessionToken: tokenRef.current },
-        (res = []) => setPreds(res)
-      );
-    },
-    []
-  );
+    };
+    checkGoogleMaps();
+  }, []);
 
-  const onChange = (e) => {
-    const val = e.target.value;
-    setQuery(val);
-    setIsOpen(true);
+  useEffect(() => {
+    setInputValue(value || '');
+  }, [value]);
 
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchPredictions(val), 180);
-  };
+  const initAutocomplete = () => {
+    if (!inputRef.current || !window.google) return;
 
-  const selectPrediction = (p) => {
-    if (!placesRef.current) return;
+    try {
+      // Limpiar autocomplete anterior
+      if (autocompleteRef.current) {
+        window.google.maps.event.clearInstanceListeners(autocompleteRef.current);
+      }
 
-    placesRef.current.getDetails(
-      {
-        placeId: p.place_id,
-        // Pide SOLO lo que necesitas para evitar nulls
-        fields: ['formatted_address', 'geometry', 'name'],
-        sessionToken: tokenRef.current,
-      },
-      (place, status) => {
-        if (status !== google.maps.places.PlacesServiceStatus.OK || !place?.geometry) {
-          // Si no hay geometry, no podemos geocodificar
+      // Crear nuevo autocomplete
+      const autocomplete = new window.google.maps.places.Autocomplete(inputRef.current, {
+        componentRestrictions: { country: 'co' },
+        fields: ['formatted_address', 'geometry', 'name', 'place_id']
+      });
+
+      // Listener para cuando se seleccione un lugar
+      autocomplete.addListener('place_changed', () => {
+        const place = autocomplete.getPlace();
+        
+        if (!place.geometry) {
+          console.error('No se encontraron detalles para el lugar seleccionado');
           return;
         }
 
-        const formatted = place.formatted_address ?? p.description ?? place.name ?? '';
-        const lat = place.geometry.location.lat();
-        const lng = place.geometry.location.lng();
+        const selectedPlace = {
+          address: place.formatted_address || place.name,
+          lat: place.geometry.location.lat(),
+          lng: place.geometry.location.lng(),
+          placeId: place.place_id
+        };
 
-        setQuery(formatted);
-        setPreds([]);
-        setIsOpen(false);
+        setInputValue(selectedPlace.address);
+        
+        // Llamar callback con los datos del lugar
+        if (onPlaceSelected) {
+          onPlaceSelected(selectedPlace);
+        }
+      });
 
-        // Nueva sesión para futuras búsquedas
-        tokenRef.current = new google.maps.places.AutocompleteSessionToken();
+      autocompleteRef.current = autocomplete;
+    } catch (error) {
+      console.error('Error inicializando autocomplete:', error);
+      setIsLoaded(false);
+    }
+  };
 
-        onPlaceSelected?.({
-          formatted_address: formatted,
-          lat,
-          lng,
-        });
+  return (
+    <div className="w-full">
+      {label && (
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          {label}
+        </label>
+      )}
+      <div className="relative">
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          {isLoaded ? (
+            <MapPin className="h-5 w-5 text-green-600" />
+          ) : (
+            <Search className="h-5 w-5 text-gray-400 animate-pulse" />
+          )}
+        </div>
+        <input
+          ref={inputRef}
+          type="text"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          placeholder={placeholder}
+          disabled={disabled || !isLoaded}
+          className="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition disabled:bg-gray-100 disabled:cursor-not-allowed"
+        />
+        {!isLoaded && (
+          <div className="absolute inset-y-0 right-0 pr-3 flex items-center">
+            <span className="text-xs text-gray-500">Cargando...</span>
+          </div>
+        )}
+      </div>
+      {!isLoaded && (
+        <p className="mt-1 text-xs text-yellow-600">
+          ⏳ Google Maps está cargando...
+        </p>
+      )}
+    </div>
+  );
+};
+
+// Hook para usar Google Maps con el mapa
+export const useGoogleMapsWithMarkers = (mapRef) => {
+  const [map, setMap] = useState(null);
+  const [directionsService, setDirectionsService] = useState(null);
+  const [directionsRenderer, setDirectionsRenderer] = useState(null);
+  const markersRef = useRef([]);
+
+  useEffect(() => {
+    if (!mapRef.current || !window.google) return;
+
+    // Crear el mapa
+    const mapInstance = new window.google.maps.Map(mapRef.current, {
+      center: { lat: 4.6097, lng: -74.0817 }, // Universidad Externado
+      zoom: 12,
+      mapTypeControl: false,
+      fullscreenControl: false,
+      streetViewControl: false
+    });
+
+    // Crear servicios de direcciones
+    const dirService = new window.google.maps.DirectionsService();
+    const dirRenderer = new window.google.maps.DirectionsRenderer({
+      map: mapInstance,
+      polylineOptions: {
+        strokeColor: '#15803d',
+        strokeWeight: 5,
+        strokeOpacity: 0.8
+      }
+    });
+
+    setMap(mapInstance);
+    setDirectionsService(dirService);
+    setDirectionsRenderer(dirRenderer);
+  }, [mapRef]);
+
+  const addMarker = (position, title, icon = null) => {
+    if (!map) return;
+
+    const marker = new window.google.maps.Marker({
+      position,
+      map,
+      title,
+      icon: icon || undefined,
+      animation: window.google.maps.Animation.DROP
+    });
+
+    markersRef.current.push(marker);
+    return marker;
+  };
+
+  const clearMarkers = () => {
+    markersRef.current.forEach(marker => marker.setMap(null));
+    markersRef.current = [];
+  };
+
+  const calculateRoute = (origin, destination, callback) => {
+    if (!directionsService || !directionsRenderer) return;
+
+    directionsService.route(
+      {
+        origin,
+        destination,
+        travelMode: window.google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => {
+        if (status === 'OK') {
+          directionsRenderer.setDirections(result);
+          if (callback) callback(result);
+        } else {
+          console.error('Error calculando ruta:', status);
+        }
       }
     );
   };
 
-  return (
-    <div ref={containerRef} className={`relative ${className}`}>
-      <input
-        value={query}
-        onChange={onChange}
-        onFocus={() => query && preds.length > 0 && setIsOpen(true)}
-        placeholder={placeholder}
-        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition"
-        disabled={!isReady}
-      />
-      {isOpen && preds.length > 0 && (
-        <ul className="absolute z-50 mt-1 w-full max-h-72 overflow-auto bg-white border border-gray-200 rounded-lg shadow-lg">
-          {preds.map((p) => (
-            <li
-              key={p.place_id}
-              onClick={() => selectPrediction(p)}
-              className="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm"
-            >
-              {p.description}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
+  const clearRoute = () => {
+    if (directionsRenderer) {
+      directionsRenderer.setDirections({ routes: [] });
+    }
+  };
+
+  return {
+    map,
+    addMarker,
+    clearMarkers,
+    calculateRoute,
+    clearRoute,
+    isLoaded: !!map
+  };
+};
+
+export default PlaceInput;

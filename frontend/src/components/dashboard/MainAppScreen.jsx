@@ -12,9 +12,10 @@ const mapContainerStyle = {
   borderRadius: '1rem'
 };
 
+// Coordenadas CORRECTAS de la Universidad Externado
 const center = {
-  lat: 4.6097,
-  lng: -74.0817
+  lat: 4.595724443192084,
+  lng: -74.06888964035532
 };
 
 const mapOptions = {
@@ -64,6 +65,21 @@ const MainAppScreen = ({ user, profile, navigate, supabase, appState, updateAppS
         (result, status) => {
           if (status === google.maps.DirectionsStatus.OK) {
             setDirections(result);
+            
+            // Extraer información de la ruta
+            const route = result.routes[0];
+            if (route && route.legs[0]) {
+              const distance = route.legs[0].distance.text;
+              const duration = route.legs[0].duration.text;
+              
+              updateAppState({
+                tripConfig: {
+                  ...appState.tripConfig,
+                  estimatedDistance: distance,
+                  estimatedDuration: duration
+                }
+              });
+            }
           } else {
             console.error('Error calculating route:', status);
           }
@@ -140,7 +156,7 @@ const MainAppScreen = ({ user, profile, navigate, supabase, appState, updateAppS
           <GoogleMap
             mapContainerStyle={mapContainerStyle}
             center={center}
-            zoom={12}
+            zoom={14}
             options={mapOptions}
           >
             {directions && (
@@ -148,7 +164,7 @@ const MainAppScreen = ({ user, profile, navigate, supabase, appState, updateAppS
                 directions={directions}
                 options={{
                   polylineOptions: {
-                    strokeColor: '#15803d', // Verde Externado
+                    strokeColor: '#15803d',
                     strokeWeight: 5,
                     strokeOpacity: 0.8
                   },
@@ -157,6 +173,22 @@ const MainAppScreen = ({ user, profile, navigate, supabase, appState, updateAppS
               />
             )}
           </GoogleMap>
+          
+          {/* Información de la ruta si existe */}
+          {appState.tripConfig.estimatedDistance && (
+            <div className="bg-gray-50 px-4 py-3 border-t">
+              <div className="flex justify-around text-sm">
+                <div className="text-center">
+                  <span className="text-gray-600">Distancia:</span>
+                  <p className="font-semibold text-green-700">{appState.tripConfig.estimatedDistance}</p>
+                </div>
+                <div className="text-center">
+                  <span className="text-gray-600">Tiempo estimado:</span>
+                  <p className="font-semibold text-green-700">{appState.tripConfig.estimatedDuration}</p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Sección específica por rol */}

@@ -6,18 +6,6 @@ const AuthScreen = ({ navigate, setUser, setProfile, loading, setLoading, supaba
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const loadProfile = async (userId) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
-    
-    if (data) {
-      setProfile(data);
-    }
-  };
-
   const handleLogin = async (e) => {
     e.preventDefault();
     
@@ -41,19 +29,51 @@ const AuthScreen = ({ navigate, setUser, setProfile, loading, setLoading, supaba
     }
 
     setUser(data.user);
-    await loadProfile(data.user.id);
     
-    // Verificar si el usuario tiene tipo configurado
-    const { data: profileData } = await supabase
+    // Verificar si existe el perfil
+    const { data: profileData, error: profileError } = await supabase
       .from('profiles')
-      .select('user_type')
+      .select('*')
       .eq('user_id', data.user.id)
       .single();
 
-    if (!profileData || !profileData.user_type) {
-      navigate('userType');
+    if (profileError || !profileData) {
+      console.log('Perfil no encontrado, creando uno nuevo...');
+      
+      // Crear perfil si no existe
+      const { data: newProfile, error: createError } = await supabase
+        .from('profiles')
+        .insert({
+          user_id: data.user.id,
+          email: email,
+          full_name: data.user.user_metadata?.full_name || email.split('@')[0],
+          user_type: null, // Se configurará en UserTypeScreen
+          total_trips: 0,
+          completed_trips: 0,
+          cancelled_trips: 0,
+          rating: 5.0
+        })
+        .select()
+        .single();
+
+      if (createError) {
+        console.error('Error creando perfil:', createError);
+        alert('Error al crear perfil. Por favor contacta soporte.');
+        setLoading(false);
+        return;
+      }
+
+      setProfile(newProfile);
+      navigate('userType'); // Ir a seleccionar tipo de usuario
     } else {
-      navigate('dashboard');
+      setProfile(profileData);
+      
+      // Si no tiene tipo de usuario, ir a seleccionarlo
+      if (!profileData.user_type) {
+        navigate('userType');
+      } else {
+        navigate('dashboard');
+      }
     }
     
     setLoading(false);

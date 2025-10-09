@@ -1,10 +1,105 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Star, MapPin, Navigation } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Star, MapPin, Navigation, Car, DollarSign, Users } from 'lucide-react';
 
 const UNIVERSIDAD_EXTERNADO = {
-  address: 'Universidad Externado de Colombia, Bogotá',
-  lat: 4.6097,
-  lng: -74.0817
+  address: 'Calle 12 #1-17 Este, Bogotá',
+  lat: 4.595724443192084,
+  lng: -74.06888964035532
+};
+
+// Componente PlaceInput simplificado (sin mapa)
+const PlaceInput = ({ 
+  label,
+  placeholder = 'Escribe una dirección...',
+  value,
+  onPlaceSelected,
+  disabled = false 
+}) => {
+  const [inputValue, setInputValue] = useState(value || '');
+  const [isLoaded, setIsLoaded] = useState(false);
+  const inputRef = useRef(null);
+  const autocompleteRef = useRef(null);
+
+  useEffect(() => {
+    const checkGoogleMaps = () => {
+      if (window.google && window.google.maps && window.google.maps.places) {
+        setIsLoaded(true);
+        initAutocomplete();
+      } else {
+        setTimeout(checkGoogleMaps, 500);
+      }
+    };
+    checkGoogleMaps();
+  }, []);
+
+  useEffect(() => {
+    setInputValue(value || '');
+  }, [value]);
+
+  const initAutocomplete = () => {
+    if (!inputRef.current || !window.google) return;
+
+    try {
+      if (autocompleteRef.current) {
+        window.google.maps.event.clearInstanceListeners(autocompleteRef.current);
+      }
+
+      const autocomplete = new window.google.maps.places.Autocomplete(inputRef.current, {
+        componentRestrictions: { country: 'co' },
+        fields: ['formatted_address', 'geometry', 'name', 'place_id']
+      });
+
+      autocomplete.addListener('place_changed', () => {
+        const place = autocomplete.getPlace();
+        
+        if (!place.geometry) {
+          alert('Por favor selecciona una dirección de la lista');
+          return;
+        }
+
+        const selectedPlace = {
+          address: place.formatted_address || place.name,
+          lat: place.geometry.location.lat(),
+          lng: place.geometry.location.lng(),
+          placeId: place.place_id
+        };
+
+        setInputValue(selectedPlace.address);
+        
+        if (onPlaceSelected) {
+          onPlaceSelected(selectedPlace);
+        }
+      });
+
+      autocompleteRef.current = autocomplete;
+    } catch (error) {
+      console.error('Error inicializando autocomplete:', error);
+    }
+  };
+
+  return (
+    <div className="w-full">
+      {label && (
+        <label className="block text-sm font-medium text-gray-700 mb-2">
+          {label}
+        </label>
+      )}
+      <div className="relative">
+        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+          <MapPin className={`h-5 w-5 ${isLoaded ? 'text-green-600' : 'text-gray-400 animate-pulse'}`} />
+        </div>
+        <input
+          ref={inputRef}
+          type="text"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          placeholder={placeholder}
+          disabled={disabled || !isLoaded}
+          className="w-full pl-10 pr-3 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition disabled:bg-gray-100"
+        />
+      </div>
+    </div>
+  );
 };
 
 const DriverSection = ({ 
@@ -20,81 +115,12 @@ const DriverSection = ({
   const { tripConfig = {} } = appState;
   const [showDirectionChoice, setShowDirectionChoice] = useState(false);
   const [tripDirection, setTripDirection] = useState(null);
-  const [tempAddress, setTempAddress] = useState('');
-  const [isGoogleMapsLoaded, setIsGoogleMapsLoaded] = useState(false);
-  const autocompleteRef = useRef(null);
-  const inputRef = useRef(null);
 
   // Valores por defecto
   const config = {
-    availableSeats: tripConfig.availableSeats || 1,
+    availableSeats: tripConfig.availableSeats || 2,
     pricePerSeat: tripConfig.pricePerSeat || 5000,
     ...tripConfig
-  };
-
-  // Verificar si Google Maps está disponible
-  useEffect(() => {
-    const checkGoogleMaps = () => {
-      if (window.google && window.google.maps && window.google.maps.places) {
-        setIsGoogleMapsLoaded(true);
-        initAutocomplete();
-      } else {
-        // Reintentar en 1 segundo
-        setTimeout(checkGoogleMaps, 1000);
-      }
-    };
-    checkGoogleMaps();
-  }, [tripDirection]);
-
-  const initAutocomplete = () => {
-    if (!inputRef.current || !window.google || !tripDirection) return;
-
-    try {
-      // Limpiar autocomplete anterior
-      if (autocompleteRef.current) {
-        window.google.maps.event.clearInstanceListeners(autocompleteRef.current);
-      }
-
-      // Crear nuevo autocomplete
-      const autocomplete = new window.google.maps.places.Autocomplete(inputRef.current, {
-        componentRestrictions: { country: 'co' },
-        fields: ['formatted_address', 'geometry', 'name']
-      });
-
-      autocomplete.addListener('place_changed', () => {
-        const place = autocomplete.getPlace();
-        
-        if (!place.geometry) {
-          console.error('No se encontraron detalles para el lugar seleccionado');
-          return;
-        }
-
-        const address = place.formatted_address || place.name;
-        const coordinates = {
-          lat: place.geometry.location.lat(),
-          lng: place.geometry.location.lng()
-        };
-
-        if (tripDirection === 'to_university') {
-          updateTripConfig({
-            pickup: address,
-            pickupLat: coordinates.lat,
-            pickupLng: coordinates.lng
-          });
-        } else {
-          updateTripConfig({
-            destination: address,
-            dropoffLat: coordinates.lat,
-            dropoffLng: coordinates.lng
-          });
-        }
-      });
-
-      autocompleteRef.current = autocomplete;
-    } catch (error) {
-      console.error('Error inicializando autocomplete:', error);
-      setIsGoogleMapsLoaded(false);
-    }
   };
 
   const updateTripConfig = (updates) => {
@@ -108,7 +134,6 @@ const DriverSection = ({
     setShowDirectionChoice(false);
     
     if (direction === 'to_university') {
-      // Cuando va HACIA la universidad, el destino es la universidad
       updateTripConfig({ 
         destination: UNIVERSIDAD_EXTERNADO.address,
         dropoffLat: UNIVERSIDAD_EXTERNADO.lat,
@@ -118,7 +143,6 @@ const DriverSection = ({
         pickupLng: null
       });
     } else {
-      // Cuando va DESDE la universidad, el punto de inicio es la universidad
       updateTripConfig({ 
         pickup: UNIVERSIDAD_EXTERNADO.address,
         pickupLat: UNIVERSIDAD_EXTERNADO.lat,
@@ -128,45 +152,27 @@ const DriverSection = ({
         dropoffLng: null
       });
     }
-    setTempAddress('');
   };
 
-  const handleManualAddressSubmit = () => {
-    if (!tempAddress.trim()) {
-      alert('Por favor ingresa una dirección');
-      return;
-    }
-
-    // Coordenadas mockeadas para fallback
-    const mockCoordinates = {
-      lat: 4.6097 + (Math.random() - 0.5) * 0.1,
-      lng: -74.0817 + (Math.random() - 0.5) * 0.1
-    };
-
-    if (tripDirection === 'to_university') {
+  const handlePlaceSelected = (place, type) => {
+    if (type === 'pickup') {
       updateTripConfig({
-        pickup: tempAddress,
-        pickupLat: mockCoordinates.lat,
-        pickupLng: mockCoordinates.lng
+        pickup: place.address,
+        pickupLat: place.lat,
+        pickupLng: place.lng
       });
     } else {
       updateTripConfig({
-        destination: tempAddress,
-        dropoffLat: mockCoordinates.lat,
-        dropoffLng: mockCoordinates.lng
+        destination: place.address,
+        dropoffLat: place.lat,
+        dropoffLng: place.lng
       });
     }
-    
-    setTempAddress('');
   };
 
   const createDriverTrip = async () => {
     if (!config.pickup || !config.destination) {
       alert('Por favor completa todos los campos');
-      return;
-    }
-    if (!config.pickupLat || !config.dropoffLat) {
-      alert('Por favor selecciona direcciones válidas');
       return;
     }
 
@@ -192,7 +198,6 @@ const DriverSection = ({
         .single();
 
       if (error) {
-        console.error('Error:', error);
         alert('Error al crear viaje: ' + error.message);
         setLoading(false);
         return;
@@ -201,7 +206,6 @@ const DriverSection = ({
       updateAppState({ currentTripId: data.id });
       navigate('driverMatching');
     } catch (error) {
-      console.error('Error:', error);
       alert('Error al crear viaje');
     } finally {
       setLoading(false);
@@ -250,191 +254,155 @@ const DriverSection = ({
   return (
     <div className="space-y-6 fade-in">
       <div className="bg-white rounded-2xl shadow-lg p-6">
-        <h2 className="text-2xl font-bold text-gray-800 mb-4">Configurar Viaje</h2>
+        <h2 className="text-2xl font-bold text-gray-800 mb-4">Ofrecer Viaje</h2>
         
         <div className="space-y-4">
-          {!tripDirection && (
+          {!tripDirection ? (
             <button
               onClick={() => setShowDirectionChoice(true)}
-              className="w-full bg-green-700 text-white py-4 rounded-lg font-semibold hover:bg-green-800 transition shadow-lg"
+              className="w-full bg-green-700 text-white py-4 rounded-lg font-semibold hover:bg-green-800 transition shadow-lg flex items-center justify-center space-x-3"
             >
-              📍 Seleccionar Dirección del Viaje
+              <Car className="w-6 h-6" />
+              <span>Configurar Viaje</span>
             </button>
-          )}
-
-          {tripDirection === 'to_university' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Punto de Inicio
-              </label>
-              <input
-                ref={inputRef}
-                type="text"
-                placeholder="Escribe tu dirección de salida..."
-                value={config.pickup || tempAddress}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setTempAddress(value);
-                  if (isGoogleMapsLoaded) {
-                    // Si Google Maps está cargado, dejar que autocomplete maneje todo
-                    return;
-                  }
-                  // Solo actualizar si no hay Google Maps
-                  if (!config.pickup) {
-                    updateTripConfig({ pickup: value });
-                  }
-                }}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition"
-              />
-              <p className="text-xs text-gray-500 mt-1">Ingresa tu dirección de salida</p>
-              
-              {!isGoogleMapsLoaded && tempAddress && !config.pickupLat && (
-                <button
-                  onClick={handleManualAddressSubmit}
-                  className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
-                >
-                  Confirmar dirección
-                </button>
-              )}
-              
-              {config.pickup && config.pickupLat && (
-                <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
-                  <p className="text-sm text-green-700">✓ Salida: {config.pickup}</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {tripDirection === 'from_university' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Destino
-              </label>
-              <input
-                ref={inputRef}
-                type="text"
-                placeholder="Escribe tu destino..."
-                value={config.destination || tempAddress}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setTempAddress(value);
-                  if (isGoogleMapsLoaded) {
-                    // Si Google Maps está cargado, dejar que autocomplete maneje todo
-                    return;
-                  }
-                  // Solo actualizar si no hay Google Maps
-                  if (!config.destination) {
-                    updateTripConfig({ destination: value });
-                  }
-                }}
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition"
-              />
-              <p className="text-xs text-gray-500 mt-1">¿A dónde vas?</p>
-              
-              {!isGoogleMapsLoaded && tempAddress && !config.dropoffLat && (
-                <button
-                  onClick={handleManualAddressSubmit}
-                  className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
-                >
-                  Confirmar dirección
-                </button>
-              )}
-              
-              {config.destination && config.dropoffLat && (
-                <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
-                  <p className="text-sm text-green-700">✓ Destino: {config.destination}</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {tripDirection && (
+          ) : (
             <>
-              {/* Mostrar resumen del viaje */}
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                <h4 className="font-semibold text-gray-700 text-sm mb-2">📍 Resumen del viaje:</h4>
-                <p className="text-xs text-gray-600">
-                  <span className="font-medium">Desde:</span> {config.pickup || 'Por definir'}
-                </p>
-                <p className="text-xs text-gray-600 mt-1">
-                  <span className="font-medium">Hasta:</span> {config.destination || 'Por definir'}
-                </p>
-              </div>
+              {tripDirection === 'to_university' && (
+                <PlaceInput
+                  label="📍 Punto de Inicio"
+                  placeholder="¿Desde dónde sales?"
+                  value={config.pickup}
+                  onPlaceSelected={(place) => handlePlaceSelected(place, 'pickup')}
+                />
+              )}
 
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Asientos Disponibles
-                  </label>
-                  <input
-                    type="number"
-                    value={config.availableSeats}
-                    onChange={(e) => updateTripConfig({ availableSeats: parseInt(e.target.value) || 1 })}
-                    min="1"
-                    max="4"
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition"
-                  />
-                </div>
+              {tripDirection === 'from_university' && (
+                <PlaceInput
+                  label="📍 Destino Final"
+                  placeholder="¿A dónde vas?"
+                  value={config.destination}
+                  onPlaceSelected={(place) => handlePlaceSelected(place, 'destination')}
+                />
+              )}
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Precio por Asiento
-                  </label>
-                  <input
-                    type="number"
-                    value={config.pricePerSeat}
-                    onChange={(e) => updateTripConfig({ pricePerSeat: parseInt(e.target.value) || 0 })}
-                    min="0"
-                    step="1000"
-                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent transition"
-                  />
+              {/* Resumen del viaje */}
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                <h4 className="font-semibold text-gray-700 text-sm mb-3">Tu ruta:</h4>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Desde:</span>
+                    <span className="font-medium text-gray-800 text-right max-w-[60%]">
+                      {config.pickup || '---'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Hasta:</span>
+                    <span className="font-medium text-gray-800 text-right max-w-[60%]">
+                      {config.destination || '---'}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <h4 className="font-semibold text-blue-900 text-sm mb-2">💡 Recomendaciones de precio</h4>
-                <ul className="text-xs text-blue-700 space-y-1">
-                  <li>• Viajes cortos (menos de 5km): $3.000 - $5.000</li>
-                  <li>• Viajes medios (5-10km): $5.000 - $8.000</li>
-                  <li>• Viajes largos (más de 10km): $8.000 - $12.000</li>
-                </ul>
-              </div>
+              {/* Configuración del viaje */}
+              {config.pickup && config.destination && (
+                <>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 mb-2">
+                        <Users className="w-4 h-4" />
+                        <span>Asientos</span>
+                      </label>
+                      <select
+                        value={config.availableSeats}
+                        onChange={(e) => updateTripConfig({ availableSeats: parseInt(e.target.value) })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                      >
+                        <option value="1">1 asiento</option>
+                        <option value="2">2 asientos</option>
+                        <option value="3">3 asientos</option>
+                        <option value="4">4 asientos</option>
+                      </select>
+                    </div>
 
-              {!isGoogleMapsLoaded && (
-                <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-3">
-                  <p className="text-xs text-yellow-800">
-                    ⚠️ Google Maps no está disponible. Usando modo manual.
-                  </p>
-                </div>
+                    <div>
+                      <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 mb-2">
+                        <DollarSign className="w-4 h-4" />
+                        <span>Precio</span>
+                      </label>
+                      <select
+                        value={config.pricePerSeat}
+                        onChange={(e) => updateTripConfig({ pricePerSeat: parseInt(e.target.value) })}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500"
+                      >
+                        <option value="3000">$3.000</option>
+                        <option value="4000">$4.000</option>
+                        <option value="5000">$5.000</option>
+                        <option value="6000">$6.000</option>
+                        <option value="7000">$7.000</option>
+                        <option value="8000">$8.000</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                    <h4 className="font-semibold text-green-900 text-sm mb-2">💰 Ganancia Potencial</h4>
+                    <div className="flex items-baseline space-x-2">
+                      <span className="text-2xl font-bold text-green-700">
+                        ${(config.availableSeats * config.pricePerSeat).toLocaleString('es-CO')}
+                      </span>
+                      <span className="text-sm text-green-600">
+                        ({config.availableSeats} × ${config.pricePerSeat.toLocaleString('es-CO')})
+                      </span>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {config.pickup && config.destination && (
+                <button
+                  onClick={createDriverTrip}
+                  disabled={loading}
+                  className="w-full bg-green-700 text-white py-4 rounded-lg font-semibold hover:bg-green-800 transition shadow-lg disabled:opacity-50"
+                >
+                  {loading ? 'Buscando pasajeros...' : '🔍 Buscar Pasajeros'}
+                </button>
               )}
 
               <button
-                onClick={createDriverTrip}
-                disabled={loading || !config.pickup || !config.destination || !config.pickupLat || !config.dropoffLat}
-                className="w-full bg-green-700 text-white py-4 rounded-lg font-semibold hover:bg-green-800 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105"
+                onClick={() => {
+                  setTripDirection(null);
+                  updateTripConfig({
+                    pickup: '',
+                    pickupLat: null,
+                    pickupLng: null,
+                    destination: '',
+                    dropoffLat: null,
+                    dropoffLng: null
+                  });
+                }}
+                className="w-full text-gray-600 hover:text-gray-800 text-sm"
               >
-                {loading ? 'Buscando pasajeros...' : '🔍 Buscar Pasajeros'}
+                Cambiar ruta
               </button>
             </>
           )}
         </div>
       </div>
 
+      {/* Estadísticas */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl shadow p-4 text-center hover:shadow-lg transition">
+        <div className="bg-white rounded-xl shadow p-4 text-center">
           <div className="text-3xl font-bold text-green-700">{profile?.total_trips || 0}</div>
-          <div className="text-sm text-gray-600 mt-1">Viajes Totales</div>
+          <div className="text-sm text-gray-600 mt-1">Viajes</div>
         </div>
-        <div className="bg-white rounded-xl shadow p-4 text-center hover:shadow-lg transition">
+        <div className="bg-white rounded-xl shadow p-4 text-center">
           <div className="text-3xl font-bold text-green-600">{profile?.completed_trips || 0}</div>
           <div className="text-sm text-gray-600 mt-1">Completados</div>
         </div>
-        <div className="bg-white rounded-xl shadow p-4 text-center hover:shadow-lg transition">
-          <div className="flex items-center justify-center space-x-1">
-            <Star className="w-6 h-6 text-yellow-400 fill-current" />
-            <div className="text-3xl font-bold text-gray-800">{profile?.rating || '5.0'}</div>
-          </div>
-          <div className="text-sm text-gray-600 mt-1">Calificación</div>
+        <div className="bg-white rounded-xl shadow p-4 text-center">
+          <Star className="w-6 h-6 text-yellow-400 fill-current mx-auto" />
+          <div className="text-2xl font-bold text-gray-800">{profile?.rating || '5.0'}</div>
         </div>
       </div>
 
