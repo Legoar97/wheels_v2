@@ -1,11 +1,75 @@
 import React, { useState, useEffect } from 'react';
-import { Navigation, MapPin, Clock, CheckCircle } from 'lucide-react';
+import { Navigation, MapPin, Clock, CheckCircle, ArrowLeft } from 'lucide-react';
+import { GoogleMap, DirectionsRenderer, useLoadScript } from '@react-google-maps/api';
 
-const LiveTripScreen = ({ user, profile, navigate, supabase, appState }) => {
+const libraries = ['places', 'directions'];
+
+const mapContainerStyle = {
+  width: '100%',
+  height: '350px',
+  borderRadius: '1rem'
+};
+
+const center = {
+  lat: 4.595724443192084,
+  lng: -74.06888964035532
+};
+
+const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateAppState }) => {
   const [currentStop, setCurrentStop] = useState(0);
   const [eta, setEta] = useState(15);
-  const { acceptedPassengers } = appState;
+  const [directions, setDirections] = useState(null);
+  const { acceptedPassengers = [] } = appState;
   const isDriver = profile?.user_type === 'driver';
+
+  const { isLoaded } = useLoadScript({
+    googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
+    libraries,
+  });
+
+  // Calcular ruta cuando carga el componente
+  useEffect(() => {
+    if (isLoaded && isDriver && acceptedPassengers.length > 0) {
+      calculateRoute();
+    }
+  }, [isLoaded, acceptedPassengers]);
+
+  const calculateRoute = () => {
+    if (!window.google || acceptedPassengers.length === 0) return;
+
+    const directionsService = new window.google.maps.DirectionsService();
+    
+    // Usar el primer pasajero como referencia
+    const firstPassenger = acceptedPassengers[0];
+    
+    directionsService.route(
+      {
+        origin: {
+          lat: firstPassenger.pickup_lat,
+          lng: firstPassenger.pickup_lng
+        },
+        destination: {
+          lat: firstPassenger.dropoff_lat,
+          lng: firstPassenger.dropoff_lng
+        },
+        travelMode: window.google.maps.TravelMode.DRIVING,
+      },
+      (result, status) => {
+        if (status === window.google.maps.DirectionsStatus.OK) {
+          setDirections(result);
+          
+          // Actualizar ETA basado en la ruta
+          const route = result.routes[0];
+          if (route && route.legs[0]) {
+            const durationMinutes = Math.ceil(route.legs[0].duration.value / 60);
+            setEta(durationMinutes);
+          }
+        } else {
+          console.error('Error calculando ruta:', status);
+        }
+      }
+    );
+  };
 
   // Simular actualización de ETA
   useEffect(() => {
@@ -23,47 +87,117 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState }) => {
   };
 
   const finishTrip = async () => {
+    console.log('=== FINALIZANDO VIAJE ===');
+    
     try {
-      // Registrar viaje exitoso
-      const { error } = await supabase
+      // Buscar el viaje en successful_trips
+      const { data: trips, error: fetchError } = await supabase
         .from('successful_trips')
-        .insert({
-          driver_id: user.id,
-          status: 'completed',
-          total_passengers: acceptedPassengers.length,
-          total_earnings: acceptedPassengers.length * 5000
-        });
+        .select('*')
+        .eq('driver_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(1);
 
-      if (error) {
-        console.error('Error finishing trip:', error);
+      console.log('Viajes encontrados:', trips);
+
+      if (fetchError) {
+        console.error('Error buscando viaje:', fetchError);
+        alert('Error al buscar viaje');
+        return;
       }
 
-      // Actualizar perfil
-      await supabase
-        .from('profiles')
-        .update({ 
-          total_trips: (profile.total_trips || 0) + 1,
-          completed_trips: (profile.completed_trips || 0) + 1
-        })
-        .eq('user_id', user.id);
+      if (trips && trips.length > 0) {
+        const trip = trips[0];
+        console.log('Actualizando viaje:', trip.id);
 
+        // Actualizar el viaje a completado
+        const { error: updateError } = await supabase
+          .from('successful_trips')
+          .update({ 
+            status: 'completed',
+            completed_at: new Date().toISOString()
+          })
+          .eq('id', trip.id);
+
+        if (updateError) {
+          console.error('Error actualizando viaje:', updateError);
+        } else {
+          console.log('✅ Viaje actualizado a completed');
+        }
+      }
+
+      // Actualizar perfil del conductor
+      const { data: currentProfile, error: profileFetchError } = await supabase
+        .from('profiles')
+        .select('total_trips, completed_trips')
+        .eq('user_id', user.id)
+        .single();
+
+      if (currentProfile && !profileFetchError) {
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .update({ 
+            total_trips: (currentProfile.total_trips || 0) + 1,
+            completed_trips: (currentProfile.completed_trips || 0) + 1
+          })
+          .eq('user_id', user.id);
+
+        if (profileError) {
+          console.error('Error actualizando perfil:', profileError);
+        } else {
+          console.log('✅ Perfil actualizado');
+        }
+      }
+
+      // Actualizar estados en searching_pool
+      const { error: poolError } = await supabase
+        .from('searching_pool')
+        .update({ status: 'completed' })
+        .eq('matched_driver_id', user.id)
+        .eq('status', 'in_progress');
+
+      if (poolError) {
+        console.error('Error actualizando searching_pool:', poolError);
+      }
+
+      console.log('✅ VIAJE FINALIZADO EXITOSAMENTE');
       alert('¡Viaje finalizado exitosamente! 🎉');
+      
+      // Limpiar estado
+      updateAppState({ 
+        tripStarted: false,
+        acceptedPassengers: [],
+        currentTripId: null
+      });
+      
       navigate('dashboard');
     } catch (error) {
       console.error('Error:', error);
-      alert('Error al finalizar viaje');
+      alert('Error al finalizar viaje: ' + error.message);
     }
   };
+
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="animate-spin w-12 h-12 border-4 border-green-200 border-t-green-700 rounded-full"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header con gradiente */}
-      <div className="bg-gradient-to-br from-green-600 to-green-800 h-64 flex items-center justify-center relative overflow-hidden">
-        <div className="absolute inset-0 opacity-20">
-          <div className="absolute top-1/4 left-1/4 w-32 h-32 bg-white rounded-full blur-3xl"></div>
-          <div className="absolute bottom-1/4 right-1/4 w-32 h-32 bg-white rounded-full blur-3xl"></div>
-        </div>
-        <div className="text-white text-center z-10">
+      <div className="bg-gradient-to-br from-green-600 to-green-800 pt-6 pb-20 px-6">
+        <button
+          onClick={() => navigate('dashboard')}
+          className="flex items-center space-x-2 text-white mb-4 hover:opacity-80"
+        >
+          <ArrowLeft className="w-5 h-5" />
+          <span>Volver</span>
+        </button>
+        
+        <div className="text-white text-center">
           <Navigation className="w-16 h-16 mx-auto mb-4 animate-pulse" />
           <h2 className="text-2xl font-bold">Viaje en Curso</h2>
           <p className="text-sm opacity-90 mt-2">
@@ -72,7 +206,30 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState }) => {
         </div>
       </div>
 
-      <div className="max-w-4xl mx-auto p-6 -mt-8">
+      <div className="max-w-4xl mx-auto px-6 -mt-12">
+        {/* Mapa con ruta */}
+        {isDriver && directions && (
+          <div className="bg-white rounded-2xl shadow-xl mb-6 overflow-hidden">
+            <GoogleMap
+              mapContainerStyle={mapContainerStyle}
+              center={center}
+              zoom={13}
+              options={{ disableDefaultUI: false, zoomControl: true }}
+            >
+              <DirectionsRenderer
+                directions={directions}
+                options={{
+                  polylineOptions: {
+                    strokeColor: '#15803d',
+                    strokeWeight: 5,
+                    strokeOpacity: 0.8
+                  }
+                }}
+              />
+            </GoogleMap>
+          </div>
+        )}
+
         {/* Card principal del viaje */}
         <div className="bg-white rounded-2xl shadow-xl p-6 mb-6">
           {/* Estado y ETA */}
@@ -116,7 +273,7 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState }) => {
                           </div>
                         )}
                         <h4 className="font-semibold text-gray-800">
-                          {idx < currentStop ? 'Completado' : idx === currentStop ? 'Próxima parada' : `Parada ${idx + 1}`}
+                          {idx < currentStop ? 'Recogido ✓' : idx === currentStop ? 'Próxima parada' : `Parada ${idx + 1}`}
                         </h4>
                       </div>
                       <p className="text-sm text-gray-600 ml-7">{passenger.pickup_address}</p>
@@ -188,7 +345,7 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState }) => {
 
         {/* Botones de acción */}
         {isDriver && (
-          <div className="space-y-3">
+          <div className="space-y-3 pb-6">
             <button
               onClick={finishTrip}
               className="w-full bg-green-700 text-white py-4 rounded-lg font-semibold hover:bg-green-800 transition shadow-lg transform hover:scale-105"
@@ -205,7 +362,7 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState }) => {
         )}
 
         {!isDriver && (
-          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 mb-6">
             <h4 className="font-semibold text-yellow-900 mb-2">⚠️ Recuerda:</h4>
             <ul className="text-sm text-yellow-800 space-y-1">
               <li>• Mantente en el punto de recogida acordado</li>

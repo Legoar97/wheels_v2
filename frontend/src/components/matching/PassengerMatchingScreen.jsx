@@ -1,84 +1,192 @@
 import React, { useState, useEffect } from 'react';
-import { CheckCircle } from 'lucide-react';
+import { CheckCircle, Clock } from 'lucide-react';
 
 const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
   const [searchStatus, setSearchStatus] = useState('searching');
   const [matchFound, setMatchFound] = useState(false);
   const [myRequestId, setMyRequestId] = useState(null);
+  const [driverInfo, setDriverInfo] = useState(null);
 
   useEffect(() => {
-    // Primero, obtener el ID de mi solicitud
+    // Obtener el ID de mi solicitud
     const getMyRequest = async () => {
-      const { data, error } = await supabase
-        .from('searching_pool')
-        .select('id')
-        .eq('user_id', user.id)
-        .eq('tipo_de_usuario', 'passenger')
-        .single();
-      
-      if (data) {
-        setMyRequestId(data.id);
+      try {
+        const { data, error } = await supabase
+          .from('searching_pool')
+          .select('id, status, matched_driver_id')
+          .eq('user_id', user.id)
+          .eq('tipo_de_usuario', 'passenger')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .single();
+        
+        if (data) {
+          console.log('Mi solicitud encontrada:', data);
+          setMyRequestId(data.id);
+          
+          // IMPORTANTE: Verificar en driver_acceptances como fuente de verdad
+          const { data: acceptance } = await supabase
+            .from('driver_acceptances')
+            .select('id, driver_id, created_at')
+            .eq('searching_pool_id', data.id)
+            .maybeSingle();
+
+          // Si existe un registro en driver_acceptances, el match es real
+          if (acceptance) {
+            console.log('✅ Match confirmado en driver_acceptances al cargar');
+            setMatchFound(true);
+            setSearchStatus('matched');
+            loadDriverInfo(data.id);
+          } 
+          // Si no hay acceptance pero el estado indica matched, algo está inconsistente
+          else if (data.status === 'matched' || data.status === 'in_progress') {
+            console.warn('⚠️ Estado matched/in_progress pero sin registro en driver_acceptances');
+            // Seguir buscando, el conductor podría estar en proceso de aceptar
+          }
+        } else {
+          console.error('No se encontró solicitud activa');
+        }
+      } catch (error) {
+        console.error('Error getting my request:', error);
       }
     };
     
     getMyRequest();
   }, [user.id, supabase]);
 
-  useEffect(() => {
-    if (!myRequestId) return;
-
-    // Verificar el estado cada 2 segundos
-    const checkStatus = setInterval(async () => {
-      const { data, error } = await supabase
-        .from('searching_pool')
-        .select('status')
-        .eq('id', myRequestId)
+  const loadDriverInfo = async (requestId) => {
+    try {
+      // Buscar en driver_acceptances usando searching_pool_id
+      const { data: acceptance, error } = await supabase
+        .from('driver_acceptances')
+        .select(`
+          driver_id,
+          passenger_id,
+          trip_info,
+          created_at
+        `)
+        .eq('searching_pool_id', requestId)
+        .order('created_at', { ascending: false })
+        .limit(1)
         .single();
-      
-      if (data) {
-        console.log('Mi estado actual:', data.status);
+
+      if (acceptance && !error) {
+        console.log('Información de aceptación cargada:', acceptance);
         
-        if (data.status === 'matched') {
+        // Obtener info del conductor desde profiles
+        const { data: driverProfile, error: profileError } = await supabase
+          .from('profiles')
+          .select('full_name, rating, total_trips, user_type')
+          .eq('user_id', acceptance.driver_id)
+          .single();
+
+        if (driverProfile && !profileError) {
+          setDriverInfo({
+            id: acceptance.driver_id,
+            name: driverProfile.full_name || 'Conductor',
+            rating: driverProfile.rating || 5.0,
+            totalTrips: driverProfile.total_trips || 0,
+            acceptedAt: new Date(acceptance.created_at).toLocaleString('es-CO')
+          });
+          console.log('Info del conductor cargada:', driverProfile);
+        } else {
+          console.error('Error cargando perfil del conductor:', profileError);
+          // Fallback con info mínima
+          setDriverInfo({
+            id: acceptance.driver_id,
+            name: 'Conductor',
+            rating: 5.0,
+            totalTrips: 0,
+            acceptedAt: new Date(acceptance.created_at).toLocaleString('es-CO')
+          });
+        }
+      } else {
+        console.error('Error cargando acceptance:', error);
+      }
+    } catch (error) {
+      console.error('Error inesperado en loadDriverInfo:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (!myRequestId || matchFound) return;
+
+    console.log('Iniciando verificación periódica para request:', myRequestId);
+
+    // Verificar driver_acceptances como fuente de verdad principal
+    const checkAcceptance = setInterval(async () => {
+      try {
+        // PRIORIDAD 1: Verificar si existe un registro en driver_acceptances
+        const { data: acceptance, error: acceptanceError } = await supabase
+          .from('driver_acceptances')
+          .select(`
+            id,
+            driver_id,
+            created_at
+          `)
+          .eq('searching_pool_id', myRequestId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(); // Usar maybeSingle() en vez de single() para evitar errores si no existe
+
+        if (acceptance && !acceptanceError) {
+          console.log('✅ Aceptación encontrada en driver_acceptances:', acceptance);
           setMatchFound(true);
           setSearchStatus('matched');
-          clearInterval(checkStatus);
-        } else if (data.status === 'in_progress') {
-          setMatchFound(true);
-          setSearchStatus('in_progress');
-          clearInterval(checkStatus);
+          loadDriverInfo(myRequestId);
+          clearInterval(checkAcceptance);
+          return; // Salir temprano si encontramos el match
         }
+
+        // PRIORIDAD 2: Como respaldo, verificar el estado en searching_pool
+        // Esto es útil si hay un delay entre la inserción en ambas tablas
+        const { data: poolData, error: poolError } = await supabase
+          .from('searching_pool')
+          .select('status, matched_driver_id')
+          .eq('id', myRequestId)
+          .single();
+        
+        if (poolData && !poolError) {
+          console.log('Estado actual en searching_pool:', poolData.status);
+          
+          // Solo si hay un matched_driver_id, significa que el conductor inició el proceso
+          if ((poolData.status === 'matched' || poolData.status === 'in_progress') && poolData.matched_driver_id) {
+            console.log('⏳ Match detectado en searching_pool, esperando confirmación en driver_acceptances...');
+            // No marcamos como encontrado aún, esperamos a que aparezca en driver_acceptances
+          } else if (poolData.status === 'searching') {
+            console.log('🔍 Todavía buscando conductor...');
+          } else if (poolData.status === 'cancelled') {
+            console.log('❌ Viaje cancelado');
+            clearInterval(checkAcceptance);
+            alert('El viaje fue cancelado');
+            navigate('dashboard');
+          }
+        }
+      } catch (error) {
+        console.error('Error en verificación:', error);
       }
     }, 2000); // Verificar cada 2 segundos
 
-    // También verificar driver_acceptances por si acaso
-    const checkAcceptances = setInterval(async () => {
-      const { data, error } = await supabase
-        .from('driver_acceptances')
-        .select('*')
-        .eq('passenger_email', user.email);
-      
-      if (data && data.length > 0) {
-        console.log('Aceptación encontrada!', data);
-        setMatchFound(true);
-        setSearchStatus('matched');
-        clearInterval(checkAcceptances);
-      }
-    }, 3000); // Verificar cada 3 segundos
-
-    // Simular progreso visual
-    setTimeout(() => setSearchStatus('analyzing'), 2000);
-    setTimeout(() => setSearchStatus('optimizing'), 4000);
+    // Simular progreso visual solo si no hay match
+    const progressTimeout1 = setTimeout(() => {
+      if (!matchFound) setSearchStatus('analyzing');
+    }, 3000);
+    
+    const progressTimeout2 = setTimeout(() => {
+      if (!matchFound) setSearchStatus('optimizing');
+    }, 6000);
 
     return () => {
-      clearInterval(checkStatus);
-      clearInterval(checkAcceptances);
+      clearInterval(checkAcceptance);
+      clearTimeout(progressTimeout1);
+      clearTimeout(progressTimeout2);
     };
-  }, [myRequestId, user.email, supabase]);
+  }, [myRequestId, matchFound, user.email, supabase, navigate]);
 
   const cancelSearch = async () => {
     try {
-      // Eliminar la solicitud
       if (myRequestId) {
+        // Eliminar la solicitud
         await supabase
           .from('searching_pool')
           .delete()
@@ -102,6 +210,35 @@ const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
             <p className="text-gray-600 mb-6">
               Un conductor ha aceptado tu solicitud de viaje
             </p>
+
+            {/* Información del conductor si está disponible */}
+            {driverInfo && (
+              <div className="bg-blue-50 rounded-xl p-4 mb-6 text-left">
+                <h3 className="font-semibold text-blue-900 mb-3">Tu Conductor:</h3>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex-1">
+                    <p className="font-bold text-blue-900 text-lg">{driverInfo.name}</p>
+                    <div className="flex items-center space-x-3 mt-1">
+                      <div className="flex items-center space-x-1">
+                        <span className="text-yellow-500">⭐</span>
+                        <span className="text-sm font-semibold text-blue-700">{driverInfo.rating.toFixed(1)}</span>
+                      </div>
+                      <span className="text-xs text-blue-600">
+                        {driverInfo.totalTrips} viajes
+                      </span>
+                    </div>
+                  </div>
+                  <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center">
+                    <span className="text-3xl">🚗</span>
+                  </div>
+                </div>
+                <div className="pt-3 border-t border-blue-200">
+                  <p className="text-xs text-blue-600">
+                    Aceptado: {driverInfo.acceptedAt}
+                  </p>
+                </div>
+              </div>
+            )}
             
             <div className="bg-green-50 rounded-xl p-4 mb-6 text-left">
               <h3 className="font-semibold text-green-900 mb-2">Próximos pasos:</h3>
@@ -200,8 +337,8 @@ const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
           </div>
 
           {myRequestId && (
-            <div className="text-xs text-gray-500 mb-4">
-              ID de solicitud: {myRequestId.slice(0, 8)}...
+            <div className="text-xs text-gray-500 mb-4 font-mono">
+              ID: {myRequestId.slice(0, 8)}...
             </div>
           )}
 
@@ -215,7 +352,10 @@ const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
 
         {/* Consejos mientras espera */}
         <div className="mt-6 bg-white rounded-xl shadow p-4">
-          <h3 className="font-semibold text-gray-800 mb-2 text-sm">Mientras esperas:</h3>
+          <h3 className="font-semibold text-gray-800 mb-2 text-sm flex items-center space-x-2">
+            <Clock className="w-4 h-4" />
+            <span>Mientras esperas:</span>
+          </h3>
           <ul className="text-xs text-gray-600 space-y-1">
             <li>✓ Mantén tu teléfono cerca para recibir notificaciones</li>
             <li>✓ Prepara el dinero exacto si vas a pagar en efectivo</li>

@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { MapPin, Navigation, Clock, User, Star, CheckCircle, Users, RefreshCw } from 'lucide-react';
+import { MapPin, Navigation, User, Star, CheckCircle, Users, RefreshCw, AlertCircle } from 'lucide-react';
 
 const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppState }) => {
   const [passengers, setPassengers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [accepting, setAccepting] = useState(null); // ID del pasajero siendo aceptado
   const { acceptedPassengers = [], currentTripId } = appState;
 
   useEffect(() => {
@@ -19,12 +20,12 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
     setError(null);
     
     try {
-      // Primero, obtener todos los pasajeros buscando viaje
+      // Obtener pasajeros que están buscando viaje (NO matched, NO in_progress)
       const { data: passengerRequests, error: fetchError } = await supabase
         .from('searching_pool')
         .select('*')
         .eq('tipo_de_usuario', 'passenger')
-        .eq('status', 'searching');
+        .eq('status', 'searching'); // Solo los que están buscando activamente
 
       if (fetchError) {
         console.error('Error fetching passengers:', fetchError);
@@ -33,7 +34,6 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
         return;
       }
 
-      // Si hay pasajeros, obtener su información de perfiles
       if (passengerRequests && passengerRequests.length > 0) {
         const passengerIds = passengerRequests.map(p => p.user_id);
         
@@ -73,56 +73,81 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
   };
 
   const acceptPassenger = async (passenger) => {
+    // Prevenir doble clic
+    if (accepting === passenger.id) return;
+    
+    setAccepting(passenger.id);
+    
     try {
-      // Actualizar estado del pasajero a "matched" inmediatamente
+      console.log('Aceptando pasajero:', passenger.id);
+
+      // Paso 1: Actualizar estado del pasajero a "matched"
       const { error: updateError } = await supabase
         .from('searching_pool')
-        .update({ status: 'matched' })
-        .eq('id', passenger.id);
+        .update({ 
+          status: 'matched',
+          matched_driver_id: user.id // Guardar referencia al conductor
+        })
+        .eq('id', passenger.id)
+        .eq('status', 'searching'); // Solo si todavía está buscando
 
       if (updateError) {
         console.error('Error updating passenger status:', updateError);
-        alert('Error al actualizar estado del pasajero');
+        alert('Error al actualizar estado del pasajero: ' + updateError.message);
+        setAccepting(null);
         return;
       }
 
-      // Crear registro en driver_acceptances
+      // Paso 2: Crear registro en driver_acceptances
       const { error: acceptError } = await supabase
         .from('driver_acceptances')
         .insert({
           driver_id: user.id,
+          passenger_id: passenger.user_id,
           passenger_email: passenger.profile.email,
+          searching_pool_id: passenger.id,
           trip_info: {
             pickup: passenger.pickup_address,
             dropoff: passenger.dropoff_address,
-            passenger_id: passenger.user_id,
             passenger_name: passenger.profile.full_name,
-            searching_pool_id: passenger.id
+            pickup_lat: passenger.pickup_lat,
+            pickup_lng: passenger.pickup_lng,
+            dropoff_lat: passenger.dropoff_lat,
+            dropoff_lng: passenger.dropoff_lng
           }
         });
 
       if (acceptError) {
         console.error('Error creating acceptance record:', acceptError);
-        // Revertir el cambio de estado si falla
+        // Revertir el cambio de estado
         await supabase
           .from('searching_pool')
-          .update({ status: 'searching' })
+          .update({ 
+            status: 'searching',
+            matched_driver_id: null
+          })
           .eq('id', passenger.id);
-        alert('Error al aceptar pasajero');
+        
+        alert('Error al aceptar pasajero: ' + acceptError.message);
+        setAccepting(null);
         return;
       }
       
-      // Actualizar estado local
+      // Paso 3: Actualizar estado local
       const newAccepted = [...acceptedPassengers, passenger];
       updateAppState({ acceptedPassengers: newAccepted });
       
-      // Remover de la lista
+      // Paso 4: Remover de la lista de disponibles
       setPassengers(passengers.filter(p => p.id !== passenger.id));
       
+      console.log('Pasajero aceptado exitosamente');
       alert(`✅ ${passenger.profile.full_name} aceptado correctamente`);
+      
     } catch (error) {
-      console.error('Error:', error);
-      alert('Error al aceptar pasajero');
+      console.error('Error inesperado:', error);
+      alert('Error inesperado al aceptar pasajero');
+    } finally {
+      setAccepting(null);
     }
   };
 
@@ -172,7 +197,6 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
 
       if (tripError) {
         console.error('Error creating trip record:', tripError);
-        // Continuar de todos modos
       }
 
       alert('✅ Viaje iniciado correctamente');
@@ -200,8 +224,12 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
 
         {/* Estado de error si existe */}
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
-            <p className="text-red-700">⚠️ {error}</p>
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 flex items-start space-x-3">
+            <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-red-700 font-medium">Error al cargar pasajeros</p>
+              <p className="text-red-600 text-sm">{error}</p>
+            </div>
           </div>
         )}
 
@@ -215,7 +243,8 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
               </span>
               <button
                 onClick={loadPassengers}
-                className="p-2 hover:bg-gray-100 rounded-lg transition"
+                disabled={loading}
+                className="p-2 hover:bg-gray-100 rounded-lg transition disabled:opacity-50"
                 title="Actualizar"
               >
                 <RefreshCw className={`w-5 h-5 text-gray-600 ${loading ? 'animate-spin' : ''}`} />
@@ -288,9 +317,17 @@ const DriverMatchingScreen = ({ user, navigate, supabase, appState, updateAppSta
                     {/* Botón de aceptar */}
                     <button
                       onClick={() => acceptPassenger(passenger)}
-                      className="ml-4 bg-green-700 text-white px-6 py-2 rounded-lg hover:bg-green-800 transition font-semibold whitespace-nowrap"
+                      disabled={accepting === passenger.id}
+                      className="ml-4 bg-green-700 text-white px-6 py-2 rounded-lg hover:bg-green-800 transition font-semibold whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                     >
-                      Aceptar
+                      {accepting === passenger.id ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                          <span>Aceptando...</span>
+                        </>
+                      ) : (
+                        <span>Aceptar</span>
+                      )}
                     </button>
                   </div>
                 </div>
