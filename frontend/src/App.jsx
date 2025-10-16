@@ -11,6 +11,7 @@ import DriverMatchingScreen from './components/matching/DriverMatchingScreen';
 import PassengerMatchingScreen from './components/matching/PassengerMatchingScreen';
 import LiveTripScreen from './components/trip/LiveTripScreen';
 import HistoryScreen from './components/shared/HistoryScreen';
+import TripCompletedScreen from './components/trip/TripCompletedScreen';
 
 // Configuración de Supabase
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -134,6 +135,8 @@ const App = () => {
         return <PassengerMatchingScreen {...commonProps} />;
       case 'liveTrip':
         return <LiveTripScreen {...commonProps} />;
+      case 'tripCompleted':
+        return <TripCompletedScreen {...commonProps} />;
       case 'history':
         return <HistoryScreen {...commonProps} />;
       default:

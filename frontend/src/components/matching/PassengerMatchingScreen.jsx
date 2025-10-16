@@ -1,27 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle, Clock } from 'lucide-react';
 
-const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
+const PassengerMatchingScreen = ({ user, navigate, supabase, updateAppState }) => {
   const [searchStatus, setSearchStatus] = useState('searching');
   const [matchFound, setMatchFound] = useState(false);
   const [myRequestId, setMyRequestId] = useState(null);
   const [driverInfo, setDriverInfo] = useState(null);
 
   useEffect(() => {
-    // Obtener el ID de mi solicitud
+    // Obtener el ID de mi solicitud MÁS RECIENTE Y ACTIVA
     const getMyRequest = async () => {
       try {
         const { data, error } = await supabase
           .from('searching_pool')
-          .select('id, status, matched_driver_id')
+          .select('id, status, matched_driver_id, created_at')
           .eq('user_id', user.id)
           .eq('tipo_de_usuario', 'passenger')
+          .in('status', ['searching', 'matched', 'in_progress', 'completed']) // Solo estados activos
           .order('created_at', { ascending: false })
           .limit(1)
-          .single();
+          .maybeSingle(); // Usar maybeSingle en vez de single
+        
+        if (error) {
+          console.error('Error buscando solicitud:', error);
+          return;
+        }
         
         if (data) {
-          console.log('Mi solicitud encontrada:', data);
+          console.log('✅ Mi solicitud encontrada:', data);
+          console.log('   ID:', data.id);
+          console.log('   Status:', data.status);
+          console.log('   Driver:', data.matched_driver_id);
+          console.log('   Creado:', data.created_at);
+          
           setMyRequestId(data.id);
           
           // IMPORTANTE: Verificar en driver_acceptances como fuente de verdad
@@ -42,6 +53,11 @@ const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
           else if (data.status === 'matched' || data.status === 'in_progress') {
             console.warn('⚠️ Estado matched/in_progress pero sin registro en driver_acceptances');
             // Seguir buscando, el conductor podría estar en proceso de aceptar
+          }
+          // Si el estado es completed, redirigir a calificaciones
+          else if (data.status === 'completed') {
+            console.log('✅ Viaje ya completado, cargando datos para calificaciones...');
+            await redirectToRatings(data.id);
           }
         } else {
           console.error('No se encontró solicitud activa');
@@ -108,80 +124,137 @@ const PassengerMatchingScreen = ({ user, navigate, supabase }) => {
     }
   };
 
-  useEffect(() => {
-    if (!myRequestId || matchFound) return;
-
-    console.log('Iniciando verificación periódica para request:', myRequestId);
-
-    // Verificar driver_acceptances como fuente de verdad principal
-    const checkAcceptance = setInterval(async () => {
-      try {
-        // PRIORIDAD 1: Verificar si existe un registro en driver_acceptances
-        const { data: acceptance, error: acceptanceError } = await supabase
-          .from('driver_acceptances')
-          .select(`
-            id,
-            driver_id,
-            created_at
-          `)
-          .eq('searching_pool_id', myRequestId)
-          .order('created_at', { ascending: false })
+  const redirectToRatings = async (requestId) => {
+    try {
+      console.log('=== REDIRIGIENDO A CALIFICACIONES ===');
+      console.log('Request ID:', requestId);
+      
+      // Cargar información del viaje para las calificaciones
+      const { data: acceptance, error: acceptanceError } = await supabase
+        .from('driver_acceptances')
+        .select('driver_id')
+        .eq('searching_pool_id', requestId)
+        .single();
+      
+      if (acceptanceError) {
+        console.error('❌ Error buscando acceptance:', acceptanceError);
+        alert('Error al cargar información del viaje. Volviendo al dashboard.');
+        navigate('dashboard');
+        return;
+      }
+      
+      if (acceptance) {
+        console.log('✅ Acceptance encontrado, driver_id:', acceptance.driver_id);
+        
+        // Buscar el trip_id en successful_trips
+        const { data: trip, error: tripError } = await supabase
+          .from('successful_trips')
+          .select('id')
+          .eq('driver_id', acceptance.driver_id)
+          .eq('status', 'completed')
+          .order('completed_at', { ascending: false })
           .limit(1)
-          .maybeSingle(); // Usar maybeSingle() en vez de single() para evitar errores si no existe
-
-        if (acceptance && !acceptanceError) {
-          console.log('✅ Aceptación encontrada en driver_acceptances:', acceptance);
-          setMatchFound(true);
-          setSearchStatus('matched');
-          loadDriverInfo(myRequestId);
-          clearInterval(checkAcceptance);
-          return; // Salir temprano si encontramos el match
-        }
-
-        // PRIORIDAD 2: Como respaldo, verificar el estado en searching_pool
-        // Esto es útil si hay un delay entre la inserción en ambas tablas
-        const { data: poolData, error: poolError } = await supabase
-          .from('searching_pool')
-          .select('status, matched_driver_id')
-          .eq('id', myRequestId)
           .single();
         
-        if (poolData && !poolError) {
-          console.log('Estado actual en searching_pool:', poolData.status);
-          
-          // Solo si hay un matched_driver_id, significa que el conductor inició el proceso
-          if ((poolData.status === 'matched' || poolData.status === 'in_progress') && poolData.matched_driver_id) {
-            console.log('⏳ Match detectado en searching_pool, esperando confirmación en driver_acceptances...');
-            // No marcamos como encontrado aún, esperamos a que aparezca en driver_acceptances
-          } else if (poolData.status === 'searching') {
-            console.log('🔍 Todavía buscando conductor...');
-          } else if (poolData.status === 'cancelled') {
-            console.log('❌ Viaje cancelado');
-            clearInterval(checkAcceptance);
-            alert('El viaje fue cancelado');
-            navigate('dashboard');
-          }
+        if (tripError) {
+          console.error('❌ Error buscando trip:', tripError);
+          alert('Error al cargar viaje. Volviendo al dashboard.');
+          navigate('dashboard');
+          return;
         }
-      } catch (error) {
-        console.error('Error en verificación:', error);
+        
+        if (trip) {
+          console.log('✅ Trip encontrado para calificaciones:', trip.id);
+          // Actualizar appState con la info necesaria
+          updateAppState({ 
+            currentTripId: trip.id,
+            acceptedPassengers: [] // Pasajero no necesita esta info
+          });
+          console.log('🎯 Navegando a tripCompleted...');
+          navigate('tripCompleted');
+        } else {
+          console.error('❌ No se encontró el trip completado');
+          alert('Viaje completado. Volviendo al dashboard.');
+          navigate('dashboard');
+        }
+      } else {
+        console.error('❌ No se encontró acceptance');
+        alert('Error: No se encontró información del viaje.');
+        navigate('dashboard');
       }
-    }, 2000); // Verificar cada 2 segundos
+    } catch (error) {
+      console.error('❌ Error en redirectToRatings:', error);
+      alert('Error inesperado. Volviendo al dashboard.');
+      navigate('dashboard');
+    }
+  };
 
-    // Simular progreso visual solo si no hay match
-    const progressTimeout1 = setTimeout(() => {
-      if (!matchFound) setSearchStatus('analyzing');
-    }, 3000);
-    
-    const progressTimeout2 = setTimeout(() => {
-      if (!matchFound) setSearchStatus('optimizing');
-    }, 6000);
+  useEffect(() => {
+      if (!myRequestId) return;
 
-    return () => {
-      clearInterval(checkAcceptance);
-      clearTimeout(progressTimeout1);
-      clearTimeout(progressTimeout2);
-    };
-  }, [myRequestId, matchFound, user.email, supabase, navigate]);
+      console.log('Iniciando verificación periódica para request:', myRequestId);
+
+      const checkStatusInterval = setInterval(async () => {
+          try {
+              console.log('🔄 Verificando con ID:', myRequestId);
+
+              const { data: poolData, error: poolError } = await supabase
+                  .from('searching_pool')
+                  .select('id, status, matched_driver_id')
+                  .eq('id', myRequestId)
+                  .single();
+
+              if (poolError || !poolData) {
+                  console.error('❌ Error al buscar en pool o no se encontró:', poolError);
+                  return;
+              }
+
+              console.log('📊 Estado actual:', poolData);
+
+              // 1. MÁXIMA PRIORIDAD: Detectar si el viaje ya se completó
+              if (poolData.status === 'completed') {
+                  console.log('✅ VIAJE COMPLETADO - Redirigiendo a calificaciones...');
+                  clearInterval(checkStatusInterval); // Detener el polling
+                  await redirectToRatings(myRequestId);
+                  return;
+              }
+
+              // 2. DETECTAR MATCH (si es la primera vez) O si el viaje está en progreso
+              if (poolData.status === 'in_progress' || poolData.status === 'matched') {
+                  // Si el match aún no se ha mostrado en la UI, hazlo ahora
+                  if (!matchFound) {
+                      console.log('✅ Match encontrado por primera vez!');
+                      setMatchFound(true);
+                      setSearchStatus('matched');
+                      loadDriverInfo(myRequestId);
+                  }
+
+                  if (poolData.status === 'in_progress') {
+                      console.log('🚗 Viaje en progreso - Esperando finalización...');
+                  } else {
+                      console.log('⏳ Match confirmado, esperando inicio de viaje...');
+                  }
+                  return; // Continuar verificando en el siguiente intervalo
+              }
+
+              // 3. Detectar si el viaje fue cancelado
+              if (poolData.status === 'cancelled') {
+                  console.log('❌ Viaje cancelado');
+                  clearInterval(checkStatusInterval);
+                  alert('El viaje fue cancelado');
+                  navigate('dashboard');
+              }
+              
+          } catch (error) {
+              console.error('Error en verificación periódica:', error);
+          }
+      }, 2000); // Se puede ajustar el intervalo si es necesario
+
+      // Función de limpieza para detener el intervalo cuando el componente se desmonte
+      return () => {
+          clearInterval(checkStatusInterval);
+      };
+  }, [myRequestId, matchFound]); 
 
   const cancelSearch = async () => {
     try {

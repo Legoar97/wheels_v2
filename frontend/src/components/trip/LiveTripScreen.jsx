@@ -143,6 +143,9 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
         console.log('✅ Viaje creado:', tripId);
       }
 
+      // Actualizar el currentTripId en el appState para que TripCompletedScreen lo use
+      updateAppState({ currentTripId: tripId });
+
       // PASO 2: Actualizar perfil del conductor
       const { data: currentProfile, error: profileFetchError } = await supabase
         .from('profiles')
@@ -219,17 +222,11 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
 
       console.log('✅✅✅ VIAJE FINALIZADO EXITOSAMENTE ✅✅✅');
       
-      // Limpiar estado local
-      updateAppState({ 
-        tripStarted: false,
-        acceptedPassengers: [],
-        currentTripId: null,
-        tripConfig: {}
-      });
+      // NO limpiar estado todavía - lo necesitamos para la pantalla de calificaciones
+      // La pantalla TripCompletedScreen lo limpiará después de calificar
       
-      alert(`✅ ¡Viaje finalizado!\n\nPasajeros: ${acceptedPassengers.length}\nGanancia: $${(acceptedPassengers.length * 5000).toLocaleString('es-CO')}`);
-      
-      navigate('dashboard');
+      // Navegar a pantalla de resumen y calificaciones
+      navigate('tripCompleted');
       
     } catch (error) {
       console.error('❌ Error finalizando viaje:', error);
