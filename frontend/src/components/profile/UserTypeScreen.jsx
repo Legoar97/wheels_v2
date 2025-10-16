@@ -3,16 +3,18 @@ import { Car, Users } from 'lucide-react';
 
 const UserTypeScreen = ({ user, profile, setProfile, navigate, supabase }) => {
   const updateUserType = async (type) => {
+    console.log('💾 Guardando tipo de usuario:', type);
     const { error } = await supabase
       .from('profiles')
       .update({ user_type: type })
       .eq('user_id', user.id);
 
     if (!error) {
+      console.log('✅ Tipo guardado, navegando a sessionRoleSelection');
       setProfile({ ...profile, user_type: type });
-      navigate('dashboard');
+      navigate('sessionRoleSelection');
     } else {
-      console.error('Error updating user type:', error);
+      console.error('❌ Error updating user type:', error);
       alert('Error al actualizar el tipo de usuario');
     }
   };

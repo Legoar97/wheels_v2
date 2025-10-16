@@ -52,6 +52,12 @@ const PassengerMatchingScreen = ({ user, navigate, supabase, updateAppState }) =
           // Si no hay acceptance pero el estado indica matched, algo está inconsistente
           else if (data.status === 'matched' || data.status === 'in_progress') {
             console.warn('⚠️ Estado matched/in_progress pero sin registro en driver_acceptances');
+            // Si está in_progress, navegar directamente
+            if (data.status === 'in_progress') {
+              console.log('🚗 Viaje ya en progreso, navegando a pantalla de viaje en vivo...');
+              navigate('passengerLiveTrip');
+              return;
+            }
             // Seguir buscando, el conductor podría estar en proceso de aceptar
           }
           // Si el estado es completed, redirigir a calificaciones
@@ -190,70 +196,73 @@ const PassengerMatchingScreen = ({ user, navigate, supabase, updateAppState }) =
   };
 
   useEffect(() => {
-      if (!myRequestId) return;
+    if (!myRequestId) return;
 
-      console.log('Iniciando verificación periódica para request:', myRequestId);
+    console.log('Iniciando verificación periódica para request:', myRequestId);
 
-      const checkStatusInterval = setInterval(async () => {
-          try {
-              console.log('🔄 Verificando con ID:', myRequestId);
+    const checkStatusInterval = setInterval(async () => {
+      try {
+        console.log('🔄 Verificando con ID:', myRequestId);
 
-              const { data: poolData, error: poolError } = await supabase
-                  .from('searching_pool')
-                  .select('id, status, matched_driver_id')
-                  .eq('id', myRequestId)
-                  .single();
+        const { data: poolData, error: poolError } = await supabase
+          .from('searching_pool')
+          .select('id, status, matched_driver_id')
+          .eq('id', myRequestId)
+          .single();
 
-              if (poolError || !poolData) {
-                  console.error('❌ Error al buscar en pool o no se encontró:', poolError);
-                  return;
-              }
+        if (poolError || !poolData) {
+          console.error('❌ Error al buscar en pool o no se encontró:', poolError);
+          return;
+        }
 
-              console.log('📊 Estado actual:', poolData);
+        console.log('📊 Estado actual:', poolData);
 
-              // 1. MÁXIMA PRIORIDAD: Detectar si el viaje ya se completó
-              if (poolData.status === 'completed') {
-                  console.log('✅ VIAJE COMPLETADO - Redirigiendo a calificaciones...');
-                  clearInterval(checkStatusInterval); // Detener el polling
-                  await redirectToRatings(myRequestId);
-                  return;
-              }
+        // 1. MÁXIMA PRIORIDAD: Detectar si el viaje ya se completó
+        if (poolData.status === 'completed') {
+          console.log('✅ VIAJE COMPLETADO - Redirigiendo a calificaciones...');
+          clearInterval(checkStatusInterval); // Detener el polling
+          await redirectToRatings(myRequestId);
+          return;
+        }
 
-              // 2. DETECTAR MATCH (si es la primera vez) O si el viaje está en progreso
-              if (poolData.status === 'in_progress' || poolData.status === 'matched') {
-                  // Si el match aún no se ha mostrado en la UI, hazlo ahora
-                  if (!matchFound) {
-                      console.log('✅ Match encontrado por primera vez!');
-                      setMatchFound(true);
-                      setSearchStatus('matched');
-                      loadDriverInfo(myRequestId);
-                  }
+        // 2. DETECTAR SI EL VIAJE ESTÁ EN PROGRESO Y NAVEGAR ⬅️ CAMBIO PRINCIPAL
+        if (poolData.status === 'in_progress') {
+          console.log('🚗 VIAJE EN PROGRESO - Navegando a pantalla de viaje en vivo...');
+          clearInterval(checkStatusInterval); // Detener el polling
+          navigate('passengerLiveTrip'); // ⬅️ NAVEGAR A LA PANTALLA DEL PASAJERO
+          return;
+        }
 
-                  if (poolData.status === 'in_progress') {
-                      console.log('🚗 Viaje en progreso - Esperando finalización...');
-                  } else {
-                      console.log('⏳ Match confirmado, esperando inicio de viaje...');
-                  }
-                  return; // Continuar verificando en el siguiente intervalo
-              }
-
-              // 3. Detectar si el viaje fue cancelado
-              if (poolData.status === 'cancelled') {
-                  console.log('❌ Viaje cancelado');
-                  clearInterval(checkStatusInterval);
-                  alert('El viaje fue cancelado');
-                  navigate('dashboard');
-              }
-              
-          } catch (error) {
-              console.error('Error en verificación periódica:', error);
+        // 3. DETECTAR MATCH (si es la primera vez)
+        if (poolData.status === 'matched') {
+          // Si el match aún no se ha mostrado en la UI, hazlo ahora
+          if (!matchFound) {
+            console.log('✅ Match encontrado por primera vez!');
+            setMatchFound(true);
+            setSearchStatus('matched');
+            loadDriverInfo(myRequestId);
           }
-      }, 2000); // Se puede ajustar el intervalo si es necesario
+          console.log('⏳ Match confirmado, esperando inicio de viaje...');
+          return; // Continuar verificando en el siguiente intervalo
+        }
 
-      // Función de limpieza para detener el intervalo cuando el componente se desmonte
-      return () => {
+        // 4. Detectar si el viaje fue cancelado
+        if (poolData.status === 'cancelled') {
+          console.log('❌ Viaje cancelado');
           clearInterval(checkStatusInterval);
-      };
+          alert('El viaje fue cancelado');
+          navigate('dashboard');
+        }
+        
+      } catch (error) {
+        console.error('Error en verificación periódica:', error);
+      }
+    }, 2000); // Verificar cada 2 segundos
+
+    // Función de limpieza para detener el intervalo cuando el componente se desmonte
+    return () => {
+      clearInterval(checkStatusInterval);
+    };
   }, [myRequestId, matchFound]); 
 
   const cancelSearch = async () => {
@@ -317,7 +326,7 @@ const PassengerMatchingScreen = ({ user, navigate, supabase, updateAppState }) =
               <h3 className="font-semibold text-green-900 mb-2">Próximos pasos:</h3>
               <ul className="text-sm text-green-800 space-y-2">
                 <li>✓ El conductor está preparando la ruta</li>
-                <li>✓ Recibirás una notificación cuando inicie el viaje</li>
+                <li>✓ Recibirás una actualización cuando inicie el viaje</li>
                 <li>✓ Prepárate en el punto de recogida acordado</li>
               </ul>
             </div>

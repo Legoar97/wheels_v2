@@ -41,15 +41,13 @@ const WelcomeScreen = ({ navigate }) => {
         {/* Features */}
         <div className="grid grid-cols-3 gap-4 pt-12 text-xs">
           <div className="space-y-2">
-            <div className="text-3xl">🚗</div>
             <div className="opacity-90">Seguro</div>
           </div>
           <div className="space-y-2">
-            <div className="text-3xl">💰</div>
+
             <div className="opacity-90">Económico</div>
           </div>
           <div className="space-y-2">
-            <div className="text-3xl">🌱</div>
             <div className="opacity-90">Sostenible</div>
           </div>
         </div>

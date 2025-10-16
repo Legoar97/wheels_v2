@@ -7,7 +7,6 @@ const UNIVERSIDAD_EXTERNADO = {
   lng: -74.06888964035532
 };
 
-// Componente PlaceInput simplificado (sin mapa)
 const PlaceInput = ({ 
   label,
   placeholder = 'Escribe una dirección...',
@@ -276,7 +275,6 @@ const PassengerSection = ({
                 />
               )}
 
-              {/* Resumen del viaje */}
               <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                 <h4 className="font-semibold text-gray-700 text-sm mb-3">Tu viaje:</h4>
                 <div className="space-y-2 text-sm">
@@ -336,19 +334,26 @@ const PassengerSection = ({
         </div>
       </div>
 
-      {/* Estadísticas */}
+      {/* Estadísticas - SOLO COMO PASAJERO */}
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-white rounded-xl shadow p-4 text-center">
-          <div className="text-3xl font-bold text-green-700">{profile?.total_trips || 0}</div>
-          <div className="text-sm text-gray-600 mt-1">Viajes</div>
+          <div className="text-3xl font-bold text-blue-700">
+            {profile?.passenger_trips || 0}
+          </div>
+          <div className="text-sm text-gray-600 mt-1">Viajes como pasajero</div>
         </div>
         <div className="bg-white rounded-xl shadow p-4 text-center">
-          <div className="text-3xl font-bold text-green-600">{profile?.completed_trips || 0}</div>
+          <div className="text-3xl font-bold text-blue-600">
+            {profile?.passenger_completed_trips || 0}
+          </div>
           <div className="text-sm text-gray-600 mt-1">Completados</div>
         </div>
         <div className="bg-white rounded-xl shadow p-4 text-center">
           <Star className="w-6 h-6 text-yellow-400 fill-current mx-auto" />
-          <div className="text-2xl font-bold text-gray-800">{profile?.rating || '5.0'}</div>
+          <div className="text-2xl font-bold text-gray-800">
+            {profile?.passenger_rating?.toFixed(1) || '5.0'}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">Rating</div>
         </div>
       </div>
 

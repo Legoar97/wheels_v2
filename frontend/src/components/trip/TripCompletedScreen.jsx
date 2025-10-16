@@ -7,14 +7,16 @@ const TripCompletedScreen = ({ user, profile, navigate, supabase, appState, upda
   const [submitting, setSubmitting] = useState(false);
   const [tripDetails, setTripDetails] = useState(null);
   const [error, setError] = useState(null);
+  const [peopleToRate, setPeopleToRate] = useState([]); // ⬅️ NUEVO: Lista dinámica
   
-  const { acceptedPassengers = [], currentTripId } = appState;
+  const { acceptedPassengers = [], currentTripId, driverId } = appState; // ⬅️ AGREGAR driverId
   const isDriver = profile?.user_type === 'driver';
 
   useEffect(() => {
     console.log('=== TripCompletedScreen cargado ===');
     console.log('currentTripId:', currentTripId);
     console.log('isDriver:', isDriver);
+    console.log('driverId:', driverId);
     console.log('acceptedPassengers:', acceptedPassengers);
     
     if (currentTripId) {
@@ -39,6 +41,46 @@ const TripCompletedScreen = ({ user, profile, navigate, supabase, appState, upda
       } else if (trip) {
         console.log('✅ Trip cargado:', trip);
         setTripDetails(trip);
+
+        // ⬅️ NUEVO: Cargar la lista de personas a calificar según el rol
+        if (isDriver) {
+          // Conductor califica a sus pasajeros
+          console.log('👨‍✈️ Conductor: Preparando lista de pasajeros a calificar');
+          if (acceptedPassengers.length > 0) {
+            const passengerList = acceptedPassengers.map(p => ({
+              userId: p.user_id,
+              name: p.profile?.full_name || 'Pasajero'
+            }));
+            setPeopleToRate(passengerList);
+            console.log('✅ Pasajeros a calificar:', passengerList);
+          }
+        } else {
+          // Pasajero califica al conductor
+          console.log('🎒 Pasajero: Preparando conductor a calificar');
+          
+          // Intentar obtener info del conductor desde driverId en appState
+          let driverUserId = driverId || trip.driver_id;
+          
+          const { data: driverProfile } = await supabase
+            .from('profiles')
+            .select('user_id, full_name')
+            .eq('user_id', driverUserId)
+            .single();
+          
+          if (driverProfile) {
+            setPeopleToRate([{
+              userId: driverProfile.user_id,
+              name: driverProfile.full_name || 'Conductor'
+            }]);
+            console.log('✅ Conductor a calificar:', driverProfile);
+          } else {
+            console.error('❌ No se pudo cargar info del conductor');
+            setPeopleToRate([{
+              userId: driverUserId,
+              name: 'Tu Conductor'
+            }]);
+          }
+        }
       }
     } catch (error) {
       console.error('Error en loadTripDetails:', error);
@@ -156,6 +198,7 @@ const TripCompletedScreen = ({ user, profile, navigate, supabase, appState, upda
         tripStarted: false,
         acceptedPassengers: [],
         currentTripId: null,
+        driverId: null, // ⬅️ NUEVO: Limpiar también driverId
         tripConfig: {}
       });
       
@@ -179,6 +222,7 @@ const TripCompletedScreen = ({ user, profile, navigate, supabase, appState, upda
         tripStarted: false,
         acceptedPassengers: [],
         currentTripId: null,
+        driverId: null, // ⬅️ NUEVO
         tripConfig: {}
       });
       navigate('dashboard');
@@ -197,6 +241,7 @@ const TripCompletedScreen = ({ user, profile, navigate, supabase, appState, upda
                 tripStarted: false,
                 acceptedPassengers: [],
                 currentTripId: null,
+                driverId: null,
                 tripConfig: {}
               });
               navigate('dashboard');
@@ -290,45 +335,26 @@ const TripCompletedScreen = ({ user, profile, navigate, supabase, appState, upda
             </div>
           )}
 
-          {isDriver ? (
-            // Conductor califica a sus pasajeros
-            <div>
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                Califica a tus pasajeros:
-              </h3>
-              {acceptedPassengers.length > 0 ? (
-                acceptedPassengers.map((passenger) => (
-                  <RatingStars
-                    key={passenger.user_id}
-                    userId={passenger.user_id}
-                    userName={passenger.profile?.full_name || 'Pasajero'}
-                  />
-                ))
-              ) : (
-                <div className="text-center py-4 text-gray-500">
-                  <p>No hay información de pasajeros</p>
-                </div>
-              )}
-            </div>
-          ) : (
-            // Pasajero califica al conductor
-            <div>
-              <h3 className="text-sm font-semibold text-gray-700 mb-3">
-                Califica a tu conductor:
-              </h3>
-              {tripDetails ? (
+          {/* ⬅️ NUEVO: Renderizar dinámicamente según peopleToRate */}
+          <div>
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">
+              {isDriver ? 'Califica a tus pasajeros:' : 'Califica a tu conductor:'}
+            </h3>
+            {peopleToRate.length > 0 ? (
+              peopleToRate.map((person) => (
                 <RatingStars
-                  userId={tripDetails.driver_id}
-                  userName="Tu Conductor"
+                  key={person.userId}
+                  userId={person.userId}
+                  userName={person.name}
                 />
-              ) : (
-                <div className="text-center py-4">
-                  <div className="animate-spin w-8 h-8 border-4 border-green-200 border-t-green-700 rounded-full mx-auto mb-2"></div>
-                  <p className="text-sm text-gray-500">Cargando información...</p>
-                </div>
-              )}
-            </div>
-          )}
+              ))
+            ) : (
+              <div className="text-center py-4">
+                <div className="animate-spin w-8 h-8 border-4 border-green-200 border-t-green-700 rounded-full mx-auto mb-2"></div>
+                <p className="text-sm text-gray-500">Cargando información...</p>
+              </div>
+            )}
+          </div>
 
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mt-4">
             <p className="text-xs text-blue-800">

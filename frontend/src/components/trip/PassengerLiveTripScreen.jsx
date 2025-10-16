@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Navigation, MapPin, Clock, CheckCircle, ArrowLeft, Star, User } from 'lucide-react';
 
-const PassengerLiveTripScreen = ({ user, profile, navigate, supabase }) => {
+const PassengerLiveTripScreen = ({ user, profile, navigate, supabase, updateAppState }) => {
   const [tripStatus, setTripStatus] = useState('waiting'); // waiting, driver_coming, picked_up, completed
   const [driverInfo, setDriverInfo] = useState(null);
   const [tripInfo, setTripInfo] = useState(null);
@@ -9,36 +9,67 @@ const PassengerLiveTripScreen = ({ user, profile, navigate, supabase }) => {
   const [showRating, setShowRating] = useState(false);
   const [rating, setRating] = useState(0);
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
+  const [myRequestId, setMyRequestId] = useState(null); // ⬅️ NUEVO
 
   useEffect(() => {
     loadTripInfo();
-    
-    // Suscripción en tiempo real al estado del viaje
-    const subscription = supabase
-      .channel('trip_updates')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'searching_pool',
-          filter: `user_id=eq.${user.id}`
-        },
-        (payload) => {
-          console.log('Estado del viaje actualizado:', payload);
-          handleTripUpdate(payload.new);
-        }
-      )
-      .subscribe();
-
-    // Polling cada 5 segundos como respaldo
-    const interval = setInterval(loadTripInfo, 5000);
-
-    return () => {
-      subscription.unsubscribe();
-      clearInterval(interval);
-    };
   }, [user.id]);
+
+  // ⬅️ NUEVO: Polling para detectar cambios
+  useEffect(() => {
+    if (!myRequestId) return;
+
+    console.log('🔄 Iniciando polling para detectar cambios en el viaje...');
+
+    const interval = setInterval(async () => {
+      try {
+        // Verificar estado en searching_pool
+        const { data: poolData, error: poolError } = await supabase
+          .from('searching_pool')
+          .select('status')
+          .eq('id', myRequestId)
+          .single();
+
+        if (poolError) {
+          console.error('Error verificando estado:', poolError);
+          return;
+        }
+
+        console.log('📊 Estado actual del viaje:', poolData.status);
+
+        // Si el viaje se completó
+        if (poolData.status === 'completed') {
+          console.log('✅ Viaje completado, redirigiendo a calificaciones...');
+          clearInterval(interval);
+          await redirectToRatings(myRequestId);
+          return;
+        }
+
+        // Verificar si ya fui recogido
+        const { data: acceptance, error: acceptanceError } = await supabase
+          .from('driver_acceptances')
+          .select('picked_up_at')
+          .eq('searching_pool_id', myRequestId)
+          .single();
+
+        if (acceptanceError) {
+          console.error('Error verificando recogida:', acceptanceError);
+          return;
+        }
+
+        // Si tengo picked_up_at y aún no he actualizado el estado
+        if (acceptance.picked_up_at && tripStatus !== 'picked_up') {
+          console.log('✅ ¡Fui recogido! Actualizando UI...');
+          setTripStatus('picked_up');
+        }
+
+      } catch (error) {
+        console.error('Error en polling:', error);
+      }
+    }, 3000); // Verificar cada 3 segundos
+
+    return () => clearInterval(interval);
+  }, [myRequestId, tripStatus]);
 
   const loadTripInfo = async () => {
     try {
@@ -48,6 +79,7 @@ const PassengerLiveTripScreen = ({ user, profile, navigate, supabase }) => {
         .select('*')
         .eq('user_id', user.id)
         .eq('tipo_de_usuario', 'passenger')
+        .in('status', ['in_progress', 'completed', 'matched'])
         .order('created_at', { ascending: false })
         .limit(1)
         .single();
@@ -57,7 +89,9 @@ const PassengerLiveTripScreen = ({ user, profile, navigate, supabase }) => {
         return;
       }
 
+      console.log('✅ Mi viaje cargado:', myTrip);
       setTripInfo(myTrip);
+      setMyRequestId(myTrip.id); // ⬅️ GUARDAR ID
 
       // Determinar el estado basado en el status
       if (myTrip.status === 'matched') {
@@ -71,20 +105,24 @@ const PassengerLiveTripScreen = ({ user, profile, navigate, supabase }) => {
           .single();
 
         if (acceptance?.picked_up_at) {
+          console.log('✅ Ya fui recogido');
           setTripStatus('picked_up');
         } else {
+          console.log('⏳ Conductor en camino');
           setTripStatus('driver_coming');
         }
       } else if (myTrip.status === 'completed') {
+        console.log('✅ Viaje completado');
         setTripStatus('completed');
-        setShowRating(true);
+        await redirectToRatings(myTrip.id);
+        return;
       }
 
       // Cargar info del conductor
       if (myTrip.matched_driver_id) {
         const { data: driverProfile } = await supabase
           .from('profiles')
-          .select('full_name, rating, total_trips')
+          .select('full_name, rating, total_trips, user_id')
           .eq('user_id', myTrip.matched_driver_id)
           .single();
 
@@ -97,61 +135,73 @@ const PassengerLiveTripScreen = ({ user, profile, navigate, supabase }) => {
     }
   };
 
-  const handleTripUpdate = (newData) => {
-    if (newData.status === 'in_progress' && tripStatus === 'waiting') {
-      setTripStatus('driver_coming');
-    } else if (newData.status === 'completed') {
-      setTripStatus('completed');
-      setShowRating(true);
-    }
-  };
-
-  const submitRating = async () => {
-    if (rating === 0) {
-      alert('Por favor selecciona una calificación');
-      return;
-    }
-
+  const redirectToRatings = async (requestId) => {
     try {
-      // Guardar calificación
-      const { error } = await supabase
-        .from('trip_ratings')
-        .insert({
-          trip_id: tripInfo.id,
-          rater_id: user.id,
-          rated_id: tripInfo.matched_driver_id,
-          rating: rating,
-          rater_type: 'passenger',
-          rated_type: 'driver'
-        });
-
-      if (error) throw error;
-
-      // Actualizar rating promedio del conductor
-      const { data: allRatings } = await supabase
-        .from('trip_ratings')
-        .select('rating')
-        .eq('rated_id', tripInfo.matched_driver_id)
-        .eq('rated_type', 'driver');
-
-      if (allRatings && allRatings.length > 0) {
-        const avgRating = allRatings.reduce((sum, r) => sum + r.rating, 0) / allRatings.length;
-        
-        await supabase
-          .from('profiles')
-          .update({ rating: avgRating.toFixed(1) })
-          .eq('user_id', tripInfo.matched_driver_id);
+      console.log('=== REDIRIGIENDO A CALIFICACIONES ===');
+      console.log('Request ID:', requestId);
+      
+      // Cargar información del viaje para las calificaciones
+      const { data: acceptance, error: acceptanceError } = await supabase
+        .from('driver_acceptances')
+        .select('driver_id')
+        .eq('searching_pool_id', requestId)
+        .single();
+      
+      if (acceptanceError) {
+        console.error('❌ Error buscando acceptance:', acceptanceError);
+        alert('Error al cargar información del viaje. Volviendo al dashboard.');
+        navigate('dashboard');
+        return;
       }
-
-      setRatingSubmitted(true);
-      setTimeout(() => navigate('dashboard'), 2000);
+      
+      if (acceptance) {
+        console.log('✅ Acceptance encontrado, driver_id:', acceptance.driver_id);
+        
+        // Buscar el trip_id en successful_trips
+        const { data: trip, error: tripError } = await supabase
+          .from('successful_trips')
+          .select('id')
+          .eq('driver_id', acceptance.driver_id)
+          .eq('status', 'completed')
+          .order('completed_at', { ascending: false })
+          .limit(1)
+          .single();
+        
+        if (tripError) {
+          console.error('❌ Error buscando trip:', tripError);
+          alert('Error al cargar viaje. Volviendo al dashboard.');
+          navigate('dashboard');
+          return;
+        }
+        
+        if (trip) {
+          console.log('✅ Trip encontrado para calificaciones:', trip.id);
+          // ⬅️ IMPORTANTE: Actualizar appState con driver_id para que el pasajero pueda calificar
+          updateAppState({ 
+            currentTripId: trip.id,
+            driverId: acceptance.driver_id, // ⬅️ NUEVO: Guardar driver_id
+            acceptedPassengers: [] // Pasajero no necesita esta info
+          });
+          console.log('🎯 Navegando a tripCompleted...');
+          navigate('tripCompleted');
+        } else {
+          console.error('❌ No se encontró el trip completado');
+          alert('Viaje completado. Volviendo al dashboard.');
+          navigate('dashboard');
+        }
+      } else {
+        console.error('❌ No se encontró acceptance');
+        alert('Error: No se encontró información del viaje.');
+        navigate('dashboard');
+      }
     } catch (error) {
-      console.error('Error guardando calificación:', error);
-      alert('Error al guardar calificación');
+      console.error('❌ Error en redirectToRatings:', error);
+      alert('Error inesperado. Volviendo al dashboard.');
+      navigate('dashboard');
     }
   };
 
-  // Pantalla de calificación
+  // Pantalla de calificación (esto ya no se usa, se redirige a TripCompletedScreen)
   if (showRating && !ratingSubmitted) {
     return (
       <div className="min-h-screen bg-gray-50 p-6 flex items-center justify-center">
@@ -161,70 +211,8 @@ const PassengerLiveTripScreen = ({ user, profile, navigate, supabase }) => {
             ¡Viaje Completado!
           </h2>
           <p className="text-gray-600 text-center mb-6">
-            ¿Cómo fue tu experiencia con el conductor?
+            Redirigiendo a calificaciones...
           </p>
-
-          {driverInfo && (
-            <div className="bg-gray-50 rounded-xl p-4 mb-6">
-              <div className="flex items-center space-x-3">
-                <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-                  <User className="w-6 h-6 text-green-700" />
-                </div>
-                <div>
-                  <p className="font-semibold text-gray-800">{driverInfo.full_name}</p>
-                  <div className="flex items-center space-x-1">
-                    <Star className="w-4 h-4 text-yellow-400 fill-current" />
-                    <span className="text-sm text-gray-600">{driverInfo.rating}</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="mb-6">
-            <p className="text-center text-gray-700 font-medium mb-3">Califica tu viaje:</p>
-            <div className="flex justify-center space-x-2">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <button
-                  key={star}
-                  onClick={() => setRating(star)}
-                  className="transform transition hover:scale-110"
-                >
-                  <Star
-                    className={`w-10 h-10 ${
-                      star <= rating
-                        ? 'text-yellow-400 fill-current'
-                        : 'text-gray-300'
-                    }`}
-                  />
-                </button>
-              ))}
-            </div>
-            {rating > 0 && (
-              <p className="text-center text-sm text-gray-600 mt-2">
-                {rating === 5 && '¡Excelente!'}
-                {rating === 4 && 'Muy bien'}
-                {rating === 3 && 'Bien'}
-                {rating === 2 && 'Regular'}
-                {rating === 1 && 'Necesita mejorar'}
-              </p>
-            )}
-          </div>
-
-          <button
-            onClick={submitRating}
-            disabled={rating === 0}
-            className="w-full bg-green-700 text-white py-3 rounded-lg font-semibold hover:bg-green-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Enviar Calificación
-          </button>
-
-          <button
-            onClick={() => navigate('dashboard')}
-            className="w-full text-gray-600 hover:text-gray-800 text-sm mt-3"
-          >
-            Omitir por ahora
-          </button>
         </div>
       </div>
     );

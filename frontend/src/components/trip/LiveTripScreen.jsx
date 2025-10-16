@@ -20,6 +20,7 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
   const [eta, setEta] = useState(15);
   const [directions, setDirections] = useState(null);
   const [finishing, setFinishing] = useState(false);
+  const [updatingStop, setUpdatingStop] = useState(false);
   const { acceptedPassengers = [] } = appState;
   const isDriver = profile?.user_type === 'driver';
 
@@ -67,9 +68,43 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
     return () => clearInterval(etaInterval);
   }, []);
 
-  const completeStop = () => {
-    if (currentStop < acceptedPassengers.length - 1) {
-      setCurrentStop(currentStop + 1);
+  const completeStop = async () => {
+    if (updatingStop) return;
+    
+    const currentPassenger = acceptedPassengers[currentStop];
+    if (!currentPassenger) return;
+
+    setUpdatingStop(true);
+    console.log('=== MARCANDO PASAJERO COMO RECOGIDO ===');
+    console.log('Pasajero:', currentPassenger.profile?.full_name || 'Usuario');
+    console.log('User ID:', currentPassenger.user_id);
+
+    try {
+      const { error: updateError } = await supabase
+        .from('driver_acceptances')
+        .update({ 
+          picked_up_at: new Date().toISOString() 
+        })
+        .eq('driver_id', user.id)
+        .eq('passenger_id', currentPassenger.user_id)
+        .eq('searching_pool_id', currentPassenger.id);
+
+      if (updateError) {
+        console.error('❌ Error actualizando pickup:', updateError);
+        throw updateError;
+      }
+
+      console.log('✅ Pasajero marcado como recogido en la BD');
+
+      if (currentStop < acceptedPassengers.length - 1) {
+        setCurrentStop(currentStop + 1);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error en completeStop:', error);
+      alert('Error al marcar pasajero como recogido: ' + error.message);
+    } finally {
+      setUpdatingStop(false);
     }
   };
 
@@ -103,7 +138,6 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
         tripId = trips[0].id;
         console.log('✅ Viaje encontrado:', tripId);
 
-        // Actualizar a completado
         const { error: updateError } = await supabase
           .from('successful_trips')
           .update({ 
@@ -120,7 +154,6 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
       } else {
         console.warn('⚠️ No se encontró viaje en successful_trips, creando uno...');
         
-        // Crear el viaje si no existe
         const { data: newTrip, error: createError } = await supabase
           .from('successful_trips')
           .insert({
@@ -143,13 +176,12 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
         console.log('✅ Viaje creado:', tripId);
       }
 
-      // Actualizar el currentTripId en el appState para que TripCompletedScreen lo use
       updateAppState({ currentTripId: tripId });
 
-      // PASO 2: Actualizar perfil del conductor
+      // PASO 2: Actualizar perfil del conductor CON CAMPOS ESPECÍFICOS
       const { data: currentProfile, error: profileFetchError } = await supabase
         .from('profiles')
-        .select('total_trips, completed_trips')
+        .select('total_trips, completed_trips, driver_trips, driver_completed_trips')
         .eq('user_id', user.id)
         .single();
 
@@ -158,7 +190,9 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
           .from('profiles')
           .update({ 
             total_trips: (currentProfile.total_trips || 0) + 1,
-            completed_trips: (currentProfile.completed_trips || 0) + 1
+            completed_trips: (currentProfile.completed_trips || 0) + 1,
+            driver_trips: (currentProfile.driver_trips || 0) + 1,
+            driver_completed_trips: (currentProfile.driver_completed_trips || 0) + 1
           })
           .eq('user_id', user.id);
 
@@ -170,7 +204,6 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
       }
 
       // PASO 3: Actualizar estados en searching_pool
-      // Actualizar conductor
       const { error: driverPoolError } = await supabase
         .from('searching_pool')
         .update({ status: 'completed' })
@@ -200,11 +233,11 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
         }
       }
 
-      // PASO 4: Actualizar perfiles de pasajeros
+      // PASO 4: Actualizar perfiles de pasajeros CON CAMPOS ESPECÍFICOS
       for (const passenger of acceptedPassengers) {
         const { data: passengerProfile } = await supabase
           .from('profiles')
-          .select('total_trips, completed_trips')
+          .select('total_trips, completed_trips, passenger_trips, passenger_completed_trips')
           .eq('user_id', passenger.user_id)
           .single();
 
@@ -213,7 +246,9 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
             .from('profiles')
             .update({
               total_trips: (passengerProfile.total_trips || 0) + 1,
-              completed_trips: (passengerProfile.completed_trips || 0) + 1
+              completed_trips: (passengerProfile.completed_trips || 0) + 1,
+              passenger_trips: (passengerProfile.passenger_trips || 0) + 1,
+              passenger_completed_trips: (passengerProfile.passenger_completed_trips || 0) + 1
             })
             .eq('user_id', passenger.user_id);
         }
@@ -222,10 +257,6 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
 
       console.log('✅✅✅ VIAJE FINALIZADO EXITOSAMENTE ✅✅✅');
       
-      // NO limpiar estado todavía - lo necesitamos para la pantalla de calificaciones
-      // La pantalla TripCompletedScreen lo limpiará después de calificar
-      
-      // Navegar a pantalla de resumen y calificaciones
       navigate('tripCompleted');
       
     } catch (error) {
@@ -338,9 +369,17 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
                     {idx === currentStop && (
                       <button
                         onClick={completeStop}
-                        className="ml-4 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-green-700 transition"
+                        disabled={updatingStop}
+                        className="ml-4 bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                       >
-                        Recogido ✓
+                        {updatingStop ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                            <span>Confirmando...</span>
+                          </>
+                        ) : (
+                          <span>Recogido ✓</span>
+                        )}
                       </button>
                     )}
                   </div>

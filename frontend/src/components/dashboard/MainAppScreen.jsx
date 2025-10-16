@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Car, Menu, User, Clock, LogOut } from 'lucide-react';
 import { GoogleMap, DirectionsRenderer, useLoadScript } from '@react-google-maps/api';
 import DriverSection from './DriverSection';
@@ -33,7 +33,23 @@ const mapOptions = {
 const MainAppScreen = ({ user, profile, navigate, supabase, appState, updateAppState, loading, setLoading }) => {
   const [showMenu, setShowMenu] = useState(false);
   const [directions, setDirections] = useState(null);
-  const isDriver = profile?.user_type === 'driver';
+  
+  // ⬅️ VERIFICACIÓN CRÍTICA
+  console.log('🎭 MainAppScreen renderizado');
+  console.log('📊 appState completo:', appState);
+  console.log('🎯 sessionRole:', appState.sessionRole);
+  
+  // ⬅️ SI NO HAY sessionRole, REDIRIGIR A SELECCIÓN
+  useEffect(() => {
+    if (!appState.sessionRole) {
+      console.log('❌ No hay sessionRole, redirigiendo a selección...');
+      navigate('sessionRoleSelection');
+    }
+  }, [appState.sessionRole]);
+  
+  const isDriver = appState.sessionRole === 'driver';
+  
+  console.log('🎭 isDriver:', isDriver);
 
   const { isLoaded } = useLoadScript({
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
@@ -42,11 +58,13 @@ const MainAppScreen = ({ user, profile, navigate, supabase, appState, updateAppS
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
+    // ⬅️ LIMPIAR sessionRole al cerrar sesión
+    updateAppState({ sessionRole: null });
     navigate('welcome');
   };
 
   // Calcular ruta cuando cambien las coordenadas
-  React.useEffect(() => {
+  useEffect(() => {
     if (isLoaded && appState.tripConfig.pickupLat && appState.tripConfig.dropoffLat) {
       const directionsService = new google.maps.DirectionsService();
 
@@ -96,6 +114,18 @@ const MainAppScreen = ({ user, profile, navigate, supabase, appState, updateAppS
     );
   }
 
+  // ⬅️ SI NO HAY sessionRole, MOSTRAR LOADING
+  if (!appState.sessionRole) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin w-12 h-12 border-4 border-green-200 border-t-green-700 rounded-full mx-auto mb-4"></div>
+          <p className="text-gray-600">Cargando...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
@@ -128,6 +158,20 @@ const MainAppScreen = ({ user, profile, navigate, supabase, appState, updateAppS
                 {isDriver ? '🚗 Conductor' : '🎒 Pasajero'}
               </span>
             </div>
+            
+            {/* ⬅️ NUEVO: Botón para cambiar rol */}
+            <button
+              onClick={() => {
+                setShowMenu(false);
+                updateAppState({ sessionRole: null }); // Limpiar rol
+                navigate('sessionRoleSelection');
+              }}
+              className="w-full flex items-center space-x-3 px-4 py-3 hover:bg-gray-100 rounded-lg transition"
+            >
+              <User className="w-5 h-5" />
+              <span>Cambiar Rol</span>
+            </button>
+            
             <button
               onClick={() => {
                 setShowMenu(false);

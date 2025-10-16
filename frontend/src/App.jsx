@@ -6,10 +6,12 @@ import WelcomeScreen from './components/auth/WelcomeScreen';
 import AuthScreen from './components/auth/AuthScreen';
 import RegisterScreen from './components/auth/RegisterScreen';
 import UserTypeScreen from './components/profile/UserTypeScreen';
+import SessionRoleSelection from './components/profile/SessionRoleSelection';
 import MainAppScreen from './components/dashboard/MainAppScreen';
 import DriverMatchingScreen from './components/matching/DriverMatchingScreen';
 import PassengerMatchingScreen from './components/matching/PassengerMatchingScreen';
 import LiveTripScreen from './components/trip/LiveTripScreen';
+import PassengerLiveTripScreen from './components/trip/PassengerLiveTripScreen';
 import HistoryScreen from './components/shared/HistoryScreen';
 import TripCompletedScreen from './components/trip/TripCompletedScreen';
 
@@ -26,6 +28,7 @@ const App = () => {
 
   // Estado global de la aplicación
   const [appState, setAppState] = useState({
+    sessionRole: null,
     tripConfig: {
       destination: '',
       pickup: '',
@@ -56,6 +59,7 @@ const App = () => {
         } else if (event === 'SIGNED_OUT') {
           setUser(null);
           setProfile(null);
+          updateAppState({ sessionRole: null });
           navigate('welcome');
         }
       }
@@ -70,8 +74,16 @@ const App = () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (session) {
       setUser(session.user);
-      await loadProfile(session.user.id);
-      navigate('dashboard');
+      const profileData = await loadProfile(session.user.id);
+      
+      // ⬅️ CAMBIO: Decidir a dónde navegar según si tiene user_type
+      if (profileData && !profileData.user_type) {
+        // Primera vez: necesita configurar su tipo preferido
+        navigate('userType');
+      } else {
+        // Ya tiene perfil: ir directo a selección de rol de sesión
+        navigate('sessionRoleSelection');
+      }
     }
   };
 
@@ -84,7 +96,10 @@ const App = () => {
     
     if (data) {
       setProfile(data);
+      return data; // ⬅️ NUEVO: Retornar los datos
     }
+    
+    return null;
   };
 
   const navigate = (screen) => {
@@ -127,6 +142,8 @@ const App = () => {
     switch (currentScreen) {
       case 'userType':
         return <UserTypeScreen {...commonProps} />;
+      case 'sessionRoleSelection':
+        return <SessionRoleSelection {...commonProps} />;
       case 'dashboard':
         return <MainAppScreen {...commonProps} />;
       case 'driverMatching':
@@ -135,6 +152,8 @@ const App = () => {
         return <PassengerMatchingScreen {...commonProps} />;
       case 'liveTrip':
         return <LiveTripScreen {...commonProps} />;
+      case 'passengerLiveTrip':
+        return <PassengerLiveTripScreen {...commonProps} />;
       case 'tripCompleted':
         return <TripCompletedScreen {...commonProps} />;
       case 'history':
