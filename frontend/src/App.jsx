@@ -46,6 +46,13 @@ const App = () => {
     currentTripId: null
   });
 
+  // Guardar estado en localStorage cuando cambie
+  useEffect(() => {
+    if (appState.currentTripId) {
+      localStorage.setItem('wheelsAppState', JSON.stringify(appState));
+    }
+  }, [appState]);
+
   // Verificar sesión al cargar
   useEffect(() => {
     checkSession();
@@ -60,6 +67,7 @@ const App = () => {
           setUser(null);
           setProfile(null);
           updateAppState({ sessionRole: null });
+          localStorage.removeItem('wheelsAppState'); // Limpiar al cerrar sesión
           navigate('welcome');
         }
       }
@@ -76,14 +84,110 @@ const App = () => {
       setUser(session.user);
       const profileData = await loadProfile(session.user.id);
       
-      // ⬅️ CAMBIO: Decidir a dónde navegar según si tiene user_type
+      // Intentar recuperar viaje activo
+      await checkActiveTrip(session.user.id);
+
+      // Si no hay viaje activo, decidir a dónde navegar
       if (profileData && !profileData.user_type) {
-        // Primera vez: necesita configurar su tipo preferido
         navigate('userType');
       } else {
-        // Ya tiene perfil: ir directo a selección de rol de sesión
-        navigate('sessionRoleSelection');
+        // Solo navegar a sessionRoleSelection si no hay viaje activo
+        const savedState = localStorage.getItem('wheelsAppState');
+        if (!savedState) {
+          navigate('sessionRoleSelection');
+        }
       }
+    }
+  };
+
+  const checkActiveTrip = async (userId) => {
+    try {
+      // Intentar recuperar estado del localStorage
+      const savedState = localStorage.getItem('wheelsAppState');
+      
+      if (savedState) {
+        const parsedState = JSON.parse(savedState);
+        
+        // Verificar si el viaje sigue activo en la BD
+        const { data: trip, error } = await supabase
+          .from('searching_pool')
+          .select('*')
+          .eq('id', parsedState.currentTripId)
+          .single();
+
+        if (!error && trip) {
+          // El viaje existe, verificar su estado
+          if (trip.status === 'searching') {
+            // Viaje buscando match
+            setAppState(parsedState);
+            navigate(trip.tipo_de_usuario === 'driver' ? 'driverMatching' : 'passengerMatching');
+            return true;
+          } else if (trip.status === 'matched') {
+            // Viaje con match encontrado
+            setAppState(parsedState);
+            navigate(trip.tipo_de_usuario === 'driver' ? 'liveTrip' : 'passengerLiveTrip');
+            return true;
+          } else if (trip.status === 'in_progress') {
+            // Viaje en progreso
+            setAppState(parsedState);
+            navigate(trip.tipo_de_usuario === 'driver' ? 'liveTrip' : 'passengerLiveTrip');
+            return true;
+          } else {
+            // Viaje completado o cancelado, limpiar
+            localStorage.removeItem('wheelsAppState');
+          }
+        } else {
+          // El viaje no existe en la BD, limpiar
+          localStorage.removeItem('wheelsAppState');
+        }
+      }
+
+      // Si no hay estado guardado, buscar viaje activo directamente en BD
+      const { data: activeTrip } = await supabase
+        .from('searching_pool')
+        .select('*')
+        .eq('user_id', userId)
+        .in('status', ['searching', 'matched', 'in_progress'])
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (activeTrip) {
+        // Hay un viaje activo, restaurar estado
+        const restoredState = {
+          ...appState,
+          currentTripId: activeTrip.id,
+          sessionRole: activeTrip.tipo_de_usuario,
+          tripConfig: {
+            destination: activeTrip.dropoff_address,
+            pickup: activeTrip.pickup_address,
+            pickupLat: activeTrip.pickup_lat,
+            pickupLng: activeTrip.pickup_lng,
+            dropoffLat: activeTrip.dropoff_lat,
+            dropoffLng: activeTrip.dropoff_lng,
+            availableSeats: activeTrip.available_seats || 3,
+            pricePerSeat: activeTrip.price_per_seat || 5000,
+            maxDetour: activeTrip.max_detour_km || 5
+          }
+        };
+        
+        setAppState(restoredState);
+        localStorage.setItem('wheelsAppState', JSON.stringify(restoredState));
+
+        // Ir a la pantalla correspondiente
+        if (activeTrip.status === 'searching') {
+          navigate(activeTrip.tipo_de_usuario === 'driver' ? 'driverMatching' : 'passengerMatching');
+        } else if (activeTrip.status === 'matched' || activeTrip.status === 'in_progress') {
+          navigate(activeTrip.tipo_de_usuario === 'driver' ? 'liveTrip' : 'passengerLiveTrip');
+        }
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('Error recuperando estado:', error);
+      localStorage.removeItem('wheelsAppState');
+      return false;
     }
   };
 
@@ -96,7 +200,7 @@ const App = () => {
     
     if (data) {
       setProfile(data);
-      return data; // ⬅️ NUEVO: Retornar los datos
+      return data;
     }
     
     return null;
@@ -107,7 +211,20 @@ const App = () => {
   };
 
   const updateAppState = (updates) => {
-    setAppState(prev => ({ ...prev, ...updates }));
+    setAppState(prev => {
+      const newState = { ...prev, ...updates };
+      
+      // Si se está limpiando el viaje, limpiar localStorage
+      if (updates.currentTripId === null) {
+        localStorage.removeItem('wheelsAppState');
+      }
+      // Si se está actualizando el currentTripId, guardar en localStorage
+      else if (updates.currentTripId) {
+        localStorage.setItem('wheelsAppState', JSON.stringify(newState));
+      }
+      
+      return newState;
+    });
   };
 
   // Props comunes para todos los componentes

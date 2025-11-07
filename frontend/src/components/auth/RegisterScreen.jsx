@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Car, CheckCircle } from 'lucide-react';
+import { Car, CheckCircle, ExternalLink } from 'lucide-react';
 
 const RegisterScreen = ({ navigate, loading, setLoading, supabase }) => {
   const [email, setEmail] = useState('');
@@ -7,6 +7,7 @@ const RegisterScreen = ({ navigate, loading, setLoading, supabase }) => {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   const handleRegister = async (e) => {
     e.preventDefault();
@@ -18,6 +19,11 @@ const RegisterScreen = ({ navigate, loading, setLoading, supabase }) => {
 
     if (password.length < 6) {
       setError('La contraseña debe tener al menos 6 caracteres');
+      return;
+    }
+
+    if (!acceptedTerms) {
+      setError('Debes aceptar los Términos y Condiciones y las Políticas de Privacidad');
       return;
     }
 
@@ -138,10 +144,54 @@ const RegisterScreen = ({ navigate, loading, setLoading, supabase }) => {
                 required
               />
             </div>
+
+            {/* Checkbox de Términos y Condiciones */}
+            <div className="space-y-3">
+              <div className="flex items-start space-x-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                <input
+                  type="checkbox"
+                  id="acceptTerms"
+                  checked={acceptedTerms}
+                  onChange={(e) => setAcceptedTerms(e.target.checked)}
+                  className="mt-1 w-4 h-4 text-green-700 border-gray-300 rounded focus:ring-green-500 cursor-pointer"
+                  required
+                />
+                <label htmlFor="acceptTerms" className="text-sm text-gray-700 cursor-pointer">
+                  Acepto los{' '}
+                  <a
+                    href="https://www.uber.com/legal/es/document/?name=general-terms-of-use&country=colombia&lang=es"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-green-700 font-semibold hover:underline inline-flex items-center"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Términos y Condiciones
+                    <ExternalLink className="w-3 h-3 ml-1" />
+                  </a>
+                  {' '}y las{' '}
+                  <a
+                    href="https://www.uber.com/global/es/privacy-notice-riders-order-recipients"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-green-700 font-semibold hover:underline inline-flex items-center"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    Políticas de Privacidad
+                    <ExternalLink className="w-3 h-3 ml-1" />
+                  </a>
+                </label>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                <p className="text-xs text-blue-800">
+                  Al crear una cuenta, aceptas que usaremos tu información de acuerdo a nuestras políticas de privacidad y términos de servicio.
+                </p>
+              </div>
+            </div>
             
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !acceptedTerms}
               className="w-full bg-green-700 text-white py-4 rounded-lg font-semibold hover:bg-green-800 transition shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? 'Creando cuenta...' : 'Registrarse'}
