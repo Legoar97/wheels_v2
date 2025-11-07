@@ -13,9 +13,17 @@ export default defineConfig({
       '.trycloudflare.com', // Permite todos los subdominios de Cloudflare
     ],
     proxy: {
-      '/api': {
+      // Redirige las peticiones /api/match a la API de Matchmaking en el puerto 5000
+      '/api/match': {
         target: 'http://localhost:5000',
         changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/match/, ''), // Quita /api/match del path
+      },
+      // Redirige las peticiones /api/optimize a la API de Optimización en el puerto 5001
+      '/api/optimize': {
+        target: 'http://localhost:5001',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/optimize/, ''), // Quita /api/optimize del path
       }
     }
   },

@@ -10,7 +10,7 @@ const TripCompletedScreen = ({ user, profile, navigate, supabase, appState, upda
   const [peopleToRate, setPeopleToRate] = useState([]); // ⬅️ NUEVO: Lista dinámica
   
   const { acceptedPassengers = [], currentTripId, driverId } = appState; // ⬅️ AGREGAR driverId
-  const isDriver = profile?.user_type === 'driver';
+  const isDriver = appState.sessionRole === 'driver';
 
   useEffect(() => {
     console.log('=== TripCompletedScreen cargado ===');
@@ -396,8 +396,8 @@ const TripCompletedScreen = ({ user, profile, navigate, supabase, appState, upda
         <div className="text-center mt-6">
           <p className="text-sm text-gray-500">
             {isDriver 
-              ? '🚗 ¡Gracias por hacer parte de nuestra comunidad de conductores!' 
-              : '🎉 ¡Gracias por viajar con nosotros!'}
+              ? '¡Gracias por hacer parte de nuestra comunidad de conductores!' 
+              : '¡Gracias por viajar con nosotros!'}
           </p>
         </div>
       </div>

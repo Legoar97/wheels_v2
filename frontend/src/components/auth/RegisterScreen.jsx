@@ -159,7 +159,7 @@ const RegisterScreen = ({ navigate, loading, setLoading, supabase }) => {
                 <label htmlFor="acceptTerms" className="text-sm text-gray-700 cursor-pointer">
                   Acepto los{' '}
                   <a
-                    href="https://www.uber.com/legal/es/document/?name=general-terms-of-use&country=colombia&lang=es"
+                    href="https://drive.google.com/file/d/15QsjsXbJQyvjlPug3c0ySAMRSQVNMCi5/view?usp=sharing "
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-green-700 font-semibold hover:underline inline-flex items-center"
@@ -170,7 +170,7 @@ const RegisterScreen = ({ navigate, loading, setLoading, supabase }) => {
                   </a>
                   {' '}y las{' '}
                   <a
-                    href="https://www.uber.com/global/es/privacy-notice-riders-order-recipients"
+                    href="https://drive.google.com/file/d/12VKu_hsDShzMauqe6V-Cr4cXYXktIiv2/view?usp=sharing"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-green-700 font-semibold hover:underline inline-flex items-center"

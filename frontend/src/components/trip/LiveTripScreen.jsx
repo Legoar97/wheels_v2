@@ -22,7 +22,7 @@ const LiveTripScreen = ({ user, profile, navigate, supabase, appState, updateApp
   const [finishing, setFinishing] = useState(false);
   const [updatingStop, setUpdatingStop] = useState(false);
   const { acceptedPassengers = [] } = appState;
-  const isDriver = profile?.user_type === 'driver';
+  const isDriver = appState.sessionRole === 'driver';
 
   const { isLoaded } = useLoadScript({
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY,
