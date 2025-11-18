@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import StateRecoveryService from './services/StateRecoveryService';
 
 // Importar componentes
 import WelcomeScreen from './components/auth/WelcomeScreen';
@@ -25,6 +26,8 @@ const App = () => {
   const [profile, setProfile] = useState(null);
   const [currentScreen, setCurrentScreen] = useState('welcome');
   const [loading, setLoading] = useState(false);
+  const [isRecoveringState, setIsRecoveringState] = useState(true);
+  const [recoveryError, setRecoveryError] = useState(null);
 
   // Estado global de la aplicación
   const [appState, setAppState] = useState({
@@ -43,15 +46,35 @@ const App = () => {
     matchedUsers: [],
     acceptedPassengers: [],
     tripStarted: false,
-    currentTripId: null
+    currentTripId: null,
+    driverId: null
   });
 
   // Guardar estado en localStorage cuando cambie
   useEffect(() => {
-    if (appState.currentTripId) {
-      localStorage.setItem('wheelsAppState', JSON.stringify(appState));
+    if (appState.currentTripId && appState.sessionRole) {
+      console.log('💾 Guardando estado en localStorage...');
+      try {
+        if (appState.sessionRole === 'driver') {
+          StateRecoveryService.saveDriverState({
+            currentTripId: appState.currentTripId,
+            sessionRole: appState.sessionRole,
+            tripConfig: appState.tripConfig,
+            acceptedPassengers: appState.acceptedPassengers,
+            tripStarted: appState.tripStarted
+          });
+        } else if (appState.sessionRole === 'passenger') {
+          StateRecoveryService.savePassengerState({
+            currentTripId: appState.currentTripId,
+            sessionRole: appState.sessionRole,
+            driverId: appState.driverId
+          });
+        }
+      } catch (error) {
+        console.error('Error guardando estado:', error);
+      }
     }
-  }, [appState]);
+  }, [appState.currentTripId, appState.sessionRole, appState.acceptedPassengers, appState.tripStarted]);
 
   // Verificar sesión al cargar
   useEffect(() => {
@@ -64,11 +87,7 @@ const App = () => {
           setUser(session.user);
           await loadProfile(session.user.id);
         } else if (event === 'SIGNED_OUT') {
-          setUser(null);
-          setProfile(null);
-          updateAppState({ sessionRole: null });
-          localStorage.removeItem('wheelsAppState'); // Limpiar al cerrar sesión
-          navigate('welcome');
+          handleSignOut();
         }
       }
     );
@@ -79,152 +98,176 @@ const App = () => {
   }, []);
 
   const checkSession = async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (session) {
-      setUser(session.user);
-      const profileData = await loadProfile(session.user.id);
-      
-      // Intentar recuperar viaje activo
-      await checkActiveTrip(session.user.id);
+    setIsRecoveringState(true);
+    setRecoveryError(null);
+    
+    try {
+      // Timeout de 10 segundos
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Timeout')), 10000)
+      );
 
-      // Si no hay viaje activo, decidir a dónde navegar
-      if (profileData && !profileData.user_type) {
-        navigate('userType');
-      } else {
-        // Solo navegar a sessionRoleSelection si no hay viaje activo
-        const savedState = localStorage.getItem('wheelsAppState');
-        if (!savedState) {
-          navigate('sessionRoleSelection');
+      const sessionPromise = supabase.auth.getSession();
+      
+      const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]);
+      
+      if (session) {
+        setUser(session.user);
+        const profileData = await loadProfile(session.user.id);
+        
+        if (profileData) {
+          // Intentar recuperar estado de viaje activo con timeout
+          const recoverPromise = recoverActiveTrip(session.user.id, profileData);
+          const recovered = await Promise.race([
+            recoverPromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Recovery timeout')), 8000))
+          ]).catch(error => {
+            console.error('Error o timeout recuperando viaje:', error);
+            return false;
+          });
+          
+          if (!recovered) {
+            // No hay viaje activo, decidir navegación normal
+            if (!profileData.user_type) {
+              navigate('userType');
+            } else {
+              navigate('sessionRoleSelection');
+            }
+          }
         }
+      } else {
+        navigate('welcome');
       }
+    } catch (error) {
+      console.error('❌ Error en checkSession:', error);
+      setRecoveryError(error.message);
+      // Si hay error, ir a welcome
+      navigate('welcome');
+    } finally {
+      setIsRecoveringState(false);
     }
   };
 
-  const checkActiveTrip = async (userId) => {
+  // Recuperar viaje activo
+  const recoverActiveTrip = async (userId, profileData) => {
     try {
-      // Intentar recuperar estado del localStorage
-      const savedState = localStorage.getItem('wheelsAppState');
+      console.log('🔍 Buscando viajes activos...');
       
-      if (savedState) {
-        const parsedState = JSON.parse(savedState);
+      // Buscar viajes como conductor
+      const driverState = await StateRecoveryService.recoverDriverState(supabase, userId);
+      if (driverState) {
+        console.log('✅ Viaje de conductor recuperado:', driverState);
         
-        // Verificar si el viaje sigue activo en la BD
-        const { data: trip, error } = await supabase
-          .from('searching_pool')
-          .select('*')
-          .eq('id', parsedState.currentTripId)
-          .single();
-
-        if (!error && trip) {
-          // El viaje existe, verificar su estado
-          if (trip.status === 'searching') {
-            // Viaje buscando match
-            setAppState(parsedState);
-            navigate(trip.tipo_de_usuario === 'driver' ? 'driverMatching' : 'passengerMatching');
-            return true;
-          } else if (trip.status === 'matched') {
-            // Viaje con match encontrado
-            setAppState(parsedState);
-            navigate(trip.tipo_de_usuario === 'driver' ? 'liveTrip' : 'passengerLiveTrip');
-            return true;
-          } else if (trip.status === 'in_progress') {
-            // Viaje en progreso
-            setAppState(parsedState);
-            navigate(trip.tipo_de_usuario === 'driver' ? 'liveTrip' : 'passengerLiveTrip');
-            return true;
-          } else {
-            // Viaje completado o cancelado, limpiar
-            localStorage.removeItem('wheelsAppState');
-          }
-        } else {
-          // El viaje no existe en la BD, limpiar
-          localStorage.removeItem('wheelsAppState');
-        }
-      }
-
-      // Si no hay estado guardado, buscar viaje activo directamente en BD
-      const { data: activeTrip } = await supabase
-        .from('searching_pool')
-        .select('*')
-        .eq('user_id', userId)
-        .in('status', ['searching', 'matched', 'in_progress'])
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
-
-      if (activeTrip) {
-        // Hay un viaje activo, restaurar estado
-        const restoredState = {
-          ...appState,
-          currentTripId: activeTrip.id,
-          sessionRole: activeTrip.tipo_de_usuario,
-          tripConfig: {
-            destination: activeTrip.dropoff_address,
-            pickup: activeTrip.pickup_address,
-            pickupLat: activeTrip.pickup_lat,
-            pickupLng: activeTrip.pickup_lng,
-            dropoffLat: activeTrip.dropoff_lat,
-            dropoffLng: activeTrip.dropoff_lng,
-            availableSeats: activeTrip.available_seats || 3,
-            pricePerSeat: activeTrip.price_per_seat || 5000,
-            maxDetour: activeTrip.max_detour_km || 5
-          }
-        };
+        // Restaurar estado completo
+        updateAppState({
+          sessionRole: 'driver',
+          currentTripId: driverState.currentTripId,
+          tripConfig: driverState.tripConfig || appState.tripConfig,
+          acceptedPassengers: driverState.acceptedPassengers || [],
+          tripStarted: driverState.status === 'in_progress'
+        });
         
-        setAppState(restoredState);
-        localStorage.setItem('wheelsAppState', JSON.stringify(restoredState));
-
-        // Ir a la pantalla correspondiente
-        if (activeTrip.status === 'searching') {
-          navigate(activeTrip.tipo_de_usuario === 'driver' ? 'driverMatching' : 'passengerMatching');
-        } else if (activeTrip.status === 'matched' || activeTrip.status === 'in_progress') {
-          navigate(activeTrip.tipo_de_usuario === 'driver' ? 'liveTrip' : 'passengerLiveTrip');
-        }
+        // Navegar a la pantalla correcta
+        navigate(driverState.screen);
         return true;
       }
 
+      // Buscar viajes como pasajero
+      const passengerState = await StateRecoveryService.recoverPassengerState(supabase, userId);
+      if (passengerState) {
+        console.log('✅ Viaje de pasajero recuperado:', passengerState);
+        
+        // Restaurar estado
+        updateAppState({
+          sessionRole: 'passenger',
+          currentTripId: passengerState.currentTripId,
+          driverId: passengerState.driverId
+        });
+        
+        // Navegar a la pantalla correcta
+        navigate(passengerState.screen);
+        return true;
+      }
+
+      console.log('ℹ️ No se encontraron viajes activos');
       return false;
+
     } catch (error) {
-      console.error('Error recuperando estado:', error);
-      localStorage.removeItem('wheelsAppState');
+      console.error('❌ Error recuperando estado:', error);
       return false;
     }
   };
 
   const loadProfile = async (userId) => {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
-    
-    if (data) {
-      setProfile(data);
-      return data;
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('user_id', userId)
+        .single();
+      
+      if (error) throw error;
+      
+      if (data) {
+        setProfile(data);
+        return data;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('Error cargando perfil:', error);
+      return null;
     }
-    
-    return null;
   };
 
   const navigate = (screen) => {
+    console.log('🧭 Navegando a:', screen);
     setCurrentScreen(screen);
   };
 
   const updateAppState = (updates) => {
     setAppState(prev => {
       const newState = { ...prev, ...updates };
+      console.log('📊 Estado actualizado:', newState);
       
-      // Si se está limpiando el viaje, limpiar localStorage
+      // Si se limpia el viaje, limpiar localStorage
       if (updates.currentTripId === null) {
-        localStorage.removeItem('wheelsAppState');
-      }
-      // Si se está actualizando el currentTripId, guardar en localStorage
-      else if (updates.currentTripId) {
-        localStorage.setItem('wheelsAppState', JSON.stringify(newState));
+        console.log('🗑️ Limpiando estado guardado...');
+        try {
+          StateRecoveryService.clearAllStates();
+        } catch (error) {
+          console.error('Error limpiando estado:', error);
+        }
       }
       
       return newState;
     });
+  };
+
+  const handleSignOut = () => {
+    console.log('👋 Cerrando sesión...');
+    setUser(null);
+    setProfile(null);
+    updateAppState({ 
+      sessionRole: null,
+      currentTripId: null,
+      tripConfig: {
+        destination: '',
+        pickup: '',
+        pickupLat: null,
+        pickupLng: null,
+        dropoffLat: null,
+        dropoffLng: null,
+        availableSeats: 3,
+        pricePerSeat: 5000,
+        maxDetour: 5
+      },
+      acceptedPassengers: [],
+      tripStarted: false,
+      driverId: null
+    });
+    StateRecoveryService.clearAllStates();
+    navigate('welcome');
   };
 
   // Props comunes para todos los componentes
@@ -240,6 +283,32 @@ const App = () => {
     updateAppState,
     supabase
   };
+
+  // Mostrar pantalla de carga mientras se recupera el estado
+  if (isRecoveringState) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin w-12 h-12 border-4 border-green-200 border-t-green-700 rounded-full mx-auto mb-4"></div>
+          <p className="text-gray-600 mb-2">Verificando viajes activos...</p>
+          {recoveryError && (
+            <div className="mt-4">
+              <p className="text-red-600 text-sm mb-2">⚠️ {recoveryError}</p>
+              <button
+                onClick={() => {
+                  setIsRecoveringState(false);
+                  navigate('welcome');
+                }}
+                className="text-green-700 hover:underline text-sm"
+              >
+                Continuar sin recuperar estado
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   // Renderizado condicional de pantallas
   const renderScreen = () => {
